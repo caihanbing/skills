@@ -9,6 +9,7 @@
 <!-- created: {{TODAY}} -->
 <!-- updated: {{TODAY}} -->
 <!-- code-basis: {{CODE_BASIS}} -->
+<!-- verification-basis: pending -->
 
 ## 工作概述
 

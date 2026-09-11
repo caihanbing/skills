@@ -25,6 +25,10 @@ Manage the short-lived delivery lifecycle of one development work item. Keep dur
 - Use `low`, `medium`, or `high` risk. Elevate rather than downgrade when data, deletion, permissions, transactions, concurrency, messaging, cross-service behavior, or compatibility may be affected.
 - Medium and high risk require a recorded passing code review before `handoff-ready`; high risk also requires a release and rollback strategy.
 - `handoff-ready` is not `closed`. If user regression is required, retain `handoff-ready` until its result is recorded as passed.
+- Entering `verifying` records an implementation `verification-basis`; `handoff-ready` and `closed` require the implementation worktree to match it.
+- When `feature-ids` is non-empty, closure requires each ID to resolve to `docs/features/<feature-id>.md` with matching metadata.
+- Closeout invokes the canonical Feature Docs contract for every associated ID; in a Git repository it uses fresh validation against the current implementation snapshot, while a non-Git repository uses structural validation only.
+- Pass `--feature-validator <path-to-feature_docs.py>` to `transition` or `close` when the default sibling validator is not available; the command must support `validate-contract`.
 - At closure, invoke `$manage-feature-docs` to update each associated Feature Doc with durable behavior, decisions, risks, and verification evidence. Do not copy transient task logs into it.
 
 ## Commands

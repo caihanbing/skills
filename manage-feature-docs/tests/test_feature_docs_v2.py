@@ -98,7 +98,7 @@ class FeatureDocsV2Tests(unittest.TestCase):
     def test_ignores_headings_inside_fenced_code(self):
         text = complete_document().replace(
             "## 业务行为",
-            "```markdown\n## 不应被解析的标题\n```\n\n## 业务行为",
+            "```markdown\n```python\n## 不应被解析的标题\n```\n\n## 业务行为",
         )
         holder, repo, path = write_repo(text)
         self.addCleanup(holder.cleanup)
@@ -197,3 +197,274 @@ class FeatureDocsV2Tests(unittest.TestCase):
             )
             self.assertNotEqual(0, result.returncode)
             self.assertIn("code-basis", result.stderr)
+
+    def test_fresh_mode_rejects_short_head_prefix(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+            path = repo / "docs" / "features" / "sample-feature.md"
+            path.parent.mkdir(parents=True)
+            path.write_text(complete_document(f"HEAD {head[:8]}; working-tree=clean"), encoding="utf-8")
+            document = FEATURE_DOCS.read_document(path)
+            errors = FEATURE_DOCS.fresh_git_errors(document, repo)
+            self.assertTrue(any("12" in error or "digest" in error for error in errors), errors)
+
+    def test_fresh_mode_accepts_legacy_twelve_char_basis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+            path = repo / "docs" / "features" / "sample-feature.md"
+            path.parent.mkdir(parents=True)
+            path.write_text(complete_document(f"HEAD {head[:12]}; working-tree=clean"), encoding="utf-8")
+            errors = FEATURE_DOCS.fresh_git_errors(FEATURE_DOCS.read_document(path), repo)
+            self.assertEqual([], errors)
+
+    def test_fresh_mode_rejects_legacy_dirty_management_documents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+            management = repo / "docs" / "features" / "sample-feature.md"
+            management.parent.mkdir(parents=True)
+            management.write_text(complete_document(f"HEAD {head[:12]}; working-tree=dirty"), encoding="utf-8")
+            errors = FEATURE_DOCS.fresh_git_errors(FEATURE_DOCS.read_document(management), repo)
+            self.assertTrue(any("legacy dirty" in error for error in errors), errors)
+
+    def test_fresh_mode_rejects_legacy_dirty_basis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+            path = repo / "docs" / "features" / "sample-feature.md"
+            path.parent.mkdir(parents=True)
+            path.write_text(complete_document(f"HEAD {head[:12]}; working-tree=dirty"), encoding="utf-8")
+            errors = FEATURE_DOCS.fresh_git_errors(FEATURE_DOCS.read_document(path), repo)
+            self.assertTrue(any("legacy dirty" in error for error in errors), errors)
+
+    def test_structural_rejects_invalid_code_basis(self):
+        holder, repo, path = write_repo(complete_document("totally-invalid-basis"))
+        self.addCleanup(holder.cleanup)
+        errors = FEATURE_DOCS.validate_document(FEATURE_DOCS.read_document(path), repo)
+        self.assertTrue(any("code-basis" in error for error in errors), errors)
+
+    def test_structural_accepts_no_git_code_basis(self):
+        holder, repo, path = write_repo(complete_document("no-git; working-tree=unknown"))
+        self.addCleanup(holder.cleanup)
+        errors = FEATURE_DOCS.validate_document(FEATURE_DOCS.read_document(path), repo)
+        self.assertEqual([], errors)
+
+    def test_rejects_last_verified_before_latest_completed_change(self):
+        text = complete_document().replace(
+            "### 2026-09-06 — 创建测试档案",
+            "### 2026-09-10 — 后续完成变更",
+        ).replace(
+            "2026-09-06",
+            "2026-01-01",
+            1,
+        )
+        holder, repo, path = write_repo(text)
+        self.addCleanup(holder.cleanup)
+        errors = FEATURE_DOCS.validate_document(FEATURE_DOCS.read_document(path), repo)
+        self.assertTrue(any("last-verified" in error and "change" in error for error in errors), errors)
+
+    def test_validate_contract_rejects_empty_required_sections(self):
+        text = re.sub(r"不适用：测试(?:文档)?。", "", complete_document())
+        holder, repo, path = write_repo(text)
+        self.addCleanup(holder.cleanup)
+        errors = FEATURE_DOCS.validate_contract_document(FEATURE_DOCS.read_document(path), repo)
+        self.assertTrue(any("empty section" in error for error in errors), errors)
+
+    def test_validate_contract_accepts_complete_document(self):
+        holder, repo, path = write_repo(complete_document())
+        self.addCleanup(holder.cleanup)
+        errors = FEATURE_DOCS.validate_contract_document(FEATURE_DOCS.read_document(path), repo)
+        self.assertEqual([], errors)
+
+    def test_validate_contract_cli_skips_catalog_integrity(self):
+        holder, repo, path = write_repo(complete_document())
+        self.addCleanup(holder.cleanup)
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "validate-contract", "--repo", str(repo), "--id", "sample-feature"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_invalid_calendar_change_date_reports_error_without_crash(self):
+        text = complete_document().replace("### 2026-09-06 — 创建测试档案", "### 2026-02-30 — 非法日期")
+        holder, repo, path = write_repo(text)
+        self.addCleanup(holder.cleanup)
+        errors = FEATURE_DOCS.validate_document(FEATURE_DOCS.read_document(path), repo)
+        self.assertTrue(any("invalid change-history date" in error for error in errors), errors)
+
+    def test_invalid_completed_date_does_not_reuse_previous_valid_date(self):
+        text = complete_document().replace(
+            "### 2026-09-06 — 创建测试档案",
+            "### 2026-09-06 — 创建测试档案\n\n- **状态**：已完成\n- **变化**：合法历史。\n- **原因**：测试。\n- **兼容性**：无。\n- **验证**：测试。\n\n### 2026-02-30 — 非法日期",
+        )
+        holder, repo, path = write_repo(text)
+        self.addCleanup(holder.cleanup)
+        errors = FEATURE_DOCS.validate_document(FEATURE_DOCS.read_document(path), repo)
+        self.assertTrue(any("invalid change-history date" in error for error in errors), errors)
+
+    def test_validate_contract_fresh_cli_rejects_stale_basis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, text=True)
+            implementation = repo / "implementation.py"
+            implementation.write_text("value = 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "implementation.py"], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "initial"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            basis = FEATURE_DOCS.git_code_basis(repo)
+            path = repo / "docs" / "features" / "sample-feature.md"
+            path.parent.mkdir(parents=True)
+            path.write_text(complete_document(basis), encoding="utf-8")
+            implementation.write_text("value = 2\n", encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "validate-contract", "--repo", str(repo), "--id", "sample-feature", "--mode", "fresh"],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("worktree digest", result.stderr)
+
+    def test_fresh_mode_detects_changed_content_with_same_dirty_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, text=True)
+            implementation = repo / "implementation.py"
+            implementation.write_text("value = 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "implementation.py"], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "initial"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            implementation.write_text("value = 2\n", encoding="utf-8")
+            basis = FEATURE_DOCS.git_code_basis(repo)
+            path = repo / "docs" / "features" / "sample-feature.md"
+            path.parent.mkdir(parents=True)
+            path.write_text(complete_document(basis), encoding="utf-8")
+            implementation.write_text("value = 3\n", encoding="utf-8")
+            errors = FEATURE_DOCS.fresh_git_errors(FEATURE_DOCS.read_document(path), repo)
+            self.assertTrue(any("digest" in error for error in errors), errors)
+
+    def test_fresh_mode_detects_untracked_nested_file_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            implementation = repo / "src" / "implementation.py"
+            implementation.parent.mkdir()
+            implementation.write_text("value = 1\n", encoding="utf-8")
+            basis = FEATURE_DOCS.git_code_basis(repo)
+            path = repo / "docs" / "features" / "sample-feature.md"
+            path.parent.mkdir(parents=True)
+            path.write_text(complete_document(basis), encoding="utf-8")
+            implementation.write_text("value = 2\n", encoding="utf-8")
+            errors = FEATURE_DOCS.fresh_git_errors(FEATURE_DOCS.read_document(path), repo)
+            self.assertTrue(any("digest" in error for error in errors), errors)
+
+    def test_fresh_mode_detects_non_management_markdown_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            implementation = repo / "schema.md"
+            implementation.write_text("version: 1\n", encoding="utf-8")
+            basis = FEATURE_DOCS.git_code_basis(repo)
+            path = repo / "docs" / "features" / "sample-feature.md"
+            path.parent.mkdir(parents=True)
+            path.write_text(complete_document(basis), encoding="utf-8")
+            implementation.write_text("version: 2\n", encoding="utf-8")
+            errors = FEATURE_DOCS.fresh_git_errors(FEATURE_DOCS.read_document(path), repo)
+            self.assertTrue(any("digest" in error for error in errors), errors)
+
+    def test_fresh_mode_detects_non_ascii_file_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            implementation = repo / "src" / "模块.py"
+            implementation.parent.mkdir(parents=True)
+            implementation.write_text("value = 1\n", encoding="utf-8")
+            basis = FEATURE_DOCS.git_code_basis(repo)
+            path = repo / "docs" / "features" / "sample-feature.md"
+            path.parent.mkdir(parents=True)
+            path.write_text(complete_document(basis), encoding="utf-8")
+            implementation.write_text("value = 2\n", encoding="utf-8")
+            errors = FEATURE_DOCS.fresh_git_errors(FEATURE_DOCS.read_document(path), repo)
+            self.assertTrue(any("digest" in error for error in errors), errors)
+
+    def test_fresh_mode_detects_renamed_implementation_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, text=True)
+            implementation = repo / "implementation.py"
+            implementation.write_text("value = 1\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "add", "implementation.py"], check=True)
+            subprocess.run(
+                ["git", "-C", str(repo), "-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-m", "initial"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            basis = FEATURE_DOCS.git_code_basis(repo)
+            path = repo / "docs" / "features" / "sample-feature.md"
+            path.parent.mkdir(parents=True)
+            path.write_text(complete_document(basis), encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "mv", "implementation.py", "renamed.py"], check=True)
+            errors = FEATURE_DOCS.fresh_git_errors(FEATURE_DOCS.read_document(path), repo)
+            self.assertTrue(any("digest" in error for error in errors), errors)
+
+    def test_current_contract_does_not_require_transient_user_regression(self):
+        contract = (SKILL_ROOT / "references" / "document-contract.md").read_text(encoding="utf-8")
+        testing_section = contract.split("## Evidence and updates", 1)[0]
+        self.assertNotIn("用户回归准备", testing_section)

@@ -13,10 +13,14 @@ Place the following contiguous metadata block immediately after the title:
 <!-- feature-status: active -->
 <!-- feature-summary: 在受控条件下取消订单。 -->
 <!-- last-verified: 2026-09-06 -->
-<!-- code-basis: HEAD abc123def456; working-tree=dirty -->
+<!-- code-basis: HEAD abc123def456; worktree-digest sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef -->
 ```
 
 Use `planned`, `active`, `deprecated`, or `retired`. Keep `docs/features/index.md` aligned with this metadata; use `sync-index` for batch edits.
+
+Fresh validation records the new `HEAD <12-hex-sha>; worktree-digest sha256:<64-hex>` form. Structural validation continues to read legacy `HEAD <12-hex-sha>; working-tree=<clean|dirty>` metadata, but fresh validation rejects legacy `dirty` evidence because it cannot establish a unique implementation snapshot; regenerate the digest basis before handoff.
+
+For a workspace without Git, `no-git; working-tree=unknown` is valid structural metadata. Fresh validation cannot establish an implementation snapshot and therefore fails.
 
 ## Required structure and style
 
@@ -34,7 +38,7 @@ Preserve this exact order of level-two headings:
 10. `安全与权限`
 11. `配置与依赖`
 12. `可观测性与运维`
-13. `测试与验证` with `已执行`、`未执行`、`用户回归准备`
+13. `测试与验证` with `已执行`、`未执行`
 14. `关键决策`
 15. `已知问题与后续工作`
 16. `变更记录`

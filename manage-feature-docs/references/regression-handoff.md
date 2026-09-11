@@ -1,4 +1,6 @@
-# User Regression Handoff
+# Legacy User Regression Handoff
+
+This reference is for auditing or normalizing legacy Feature Docs that already contain `### 用户回归准备`. Do not add this section to new or normally updated Feature Docs; current release, restart, and user-regression handoff belongs to the associated Work Item.
 
 Keep `## 测试与验证 > ### 用户回归准备` with these fields in this exact order:
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import os
 import re
 import subprocess
@@ -71,6 +72,9 @@ STRUCTURED_SECTION_FIELDS = {
     "## 已知问题与后续工作": ("影响", "当前处理", "后续动作"),
 }
 CHANGE_STATUSES = {"已完成", "部分完成", "已回滚"}
+CODE_BASIS_RE = re.compile(r"HEAD\s+(?:[0-9a-fA-F]{12}|unborn);\s*worktree-digest\s+sha256:[0-9a-fA-F]{64}$")
+LEGACY_CODE_BASIS_RE = re.compile(r"HEAD\s+(?:[0-9a-fA-F]{12}|unborn);\s*working-tree=(?:clean|dirty)$")
+NO_GIT_CODE_BASIS_RE = re.compile(r"no-git;\s*working-tree=unknown$")
 CHINESE_UNRESOLVED_REGRESSION_RE = re.compile(
     r"待确认|待定|(?<![无不])需(?:要)?确认|尚未确定|未确定|"
     r"稍后(?:补充|确认)|后续(?:补充|确认)|尚不(?:明确|清楚)|未知|不清楚|不明确"
@@ -85,6 +89,7 @@ PLACEHOLDER_PATTERNS = (
     re.compile(r"\{\{[A-Z0-9_]+\}\}"),
     re.compile(r"\[(?:TODO|TBD)\]", re.IGNORECASE),
 )
+MANAGEMENT_DOC_PREFIXES = ("docs/features/", "docs/work-items/", "docs/superpowers/")
 
 
 class FeatureDocsError(Exception):
@@ -128,7 +133,8 @@ def mask_fenced_blocks(text: str) -> str:
             masked.append(" " * (len(line.rstrip("\r\n"))) + line[len(line.rstrip("\r\n")) :])
             continue
         if fence is not None:
-            if marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= fence[1]:
+            closing = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$", line.rstrip("\r\n"))
+            if closing and closing.group(1)[0] == fence[0] and len(closing.group(1)) >= fence[1]:
                 fence = None
             masked.append(" " * (len(line.rstrip("\r\n"))) + line[len(line.rstrip("\r\n")) :])
             continue
@@ -206,9 +212,46 @@ def git_code_basis(repo: Path) -> str:
         return "no-git; working-tree=unknown"
     head = run_git("rev-parse", "--short=12", "HEAD")
     sha = head.stdout.strip() if head.returncode == 0 else "unborn"
-    status = run_git("status", "--porcelain")
-    state = "dirty" if status.returncode != 0 or status.stdout.strip() else "clean"
-    return f"HEAD {sha}; working-tree={state}"
+    digest = implementation_worktree_digest(repo)
+    return f"HEAD {sha}; worktree-digest sha256:{digest}"
+
+
+def implementation_worktree_digest(repo: Path) -> str | None:
+    """Hash changed implementation files, excluding management documents."""
+    status = subprocess.run(
+        ["git", "-C", str(repo), "status", "--porcelain", "-z", "--untracked-files=all"],
+        capture_output=True,
+        check=False,
+    )
+    entries: list[bytes] = []
+    records = status.stdout.split(b"\0")
+    index = 0
+    while index < len(records):
+        record = records[index]
+        index += 1
+        if len(record) < 4:
+            continue
+        state, raw_path = record[:2], record[3:]
+        paths = [raw_path]
+        if b"R" in state or b"C" in state:
+            if index < len(records):
+                paths.append(records[index])
+                index += 1
+        for path_bytes in paths:
+            path = path_bytes.decode("utf-8", "surrogateescape")
+            if path.startswith(MANAGEMENT_DOC_PREFIXES):
+                continue
+            absolute = repo / path
+            try:
+                content = absolute.read_bytes() if absolute.exists() else b""
+            except OSError:
+                content = b""
+            entries.append(state + b"\0" + path_bytes + b"\0" + hashlib.sha256(content).digest())
+    digest = hashlib.sha256()
+    for entry in sorted(entries):
+        digest.update(entry)
+        digest.update(b"\n")
+    return digest.hexdigest()
 
 
 def fresh_git_errors(document: FeatureDocument, repo: Path) -> list[str]:
@@ -219,24 +262,30 @@ def fresh_git_errors(document: FeatureDocument, repo: Path) -> list[str]:
     if git("rev-parse", "--is-inside-work-tree").stdout.strip() != "true":
         return ["fresh validation requires a Git repository"]
     basis = document.metadata.get("code-basis", "")
-    match = re.fullmatch(r"HEAD\s+([0-9a-fA-F]+|unborn);\s*working-tree=(clean|dirty)(?:\s*\([^)]*\))?", basis)
-    if not match:
-        return ["code-basis must use 'HEAD <sha>; working-tree=<clean|dirty>' for fresh validation"]
+    match = re.fullmatch(r"HEAD\s+([0-9a-fA-F]{12}|unborn);\s*worktree-digest\s+sha256:([0-9a-fA-F]{64})", basis)
+    legacy = re.fullmatch(r"HEAD\s+([0-9a-fA-F]{12}|unborn);\s*working-tree=(clean|dirty)", basis)
+    if not match and not legacy:
+        return ["code-basis must use 'HEAD <12-hex-sha>; worktree-digest sha256:<64-hex>' or legacy 12-hex working-tree format"]
     actual_head = git("rev-parse", "--short=12", "HEAD").stdout.strip() or "unborn"
     errors: list[str] = []
-    if not actual_head.startswith(match.group(1)):
+    recorded_head = match.group(1) if match else legacy.group(1)
+    if actual_head != recorded_head:
         errors.append("code-basis HEAD does not match current HEAD")
-    status_lines = git("status", "--porcelain").stdout.splitlines()
-    implementation_dirty = False
-    for line in status_lines:
-        path = line[3:].split(" -> ")[-1] if len(line) > 3 else ""
-        if not path.startswith(("docs/features/", "docs/work-items/")):
-            implementation_dirty = True
-            break
-    documented_dirty = match.group(2) == "dirty"
-    if documented_dirty != implementation_dirty:
+    actual_digest = implementation_worktree_digest(repo)
+    if actual_digest is None:
+        errors.append("code-basis worktree digest cannot be computed")
+    elif match and actual_digest != match.group(2):
+        errors.append("code-basis worktree digest does not match implementation changes")
+    elif legacy and legacy.group(2) == "clean" and actual_digest != hashlib.sha256().hexdigest():
         errors.append("code-basis working-tree state does not match implementation changes")
+    elif legacy and legacy.group(2) == "dirty":
+        errors.append("legacy dirty code-basis cannot establish freshness; regenerate digest basis")
     return errors
+
+
+def validate_contract_document(document: FeatureDocument, repo: Path) -> list[str]:
+    """Validate one Feature Doc without catalog or index checks."""
+    return validate_document(document, repo)
 
 
 def escape_table_cell(value: str) -> str:
@@ -453,6 +502,7 @@ def validate_document(document: FeatureDocument, repo: Path) -> list[str]:
     if status and status not in ALLOWED_STATUSES:
         errors.append(f"unsupported feature-status: {status}")
     verified = metadata.get("last-verified")
+    verified_date: dt.date | None = None
     if verified:
         try:
             verified_date = dt.date.fromisoformat(verified)
@@ -460,6 +510,9 @@ def validate_document(document: FeatureDocument, repo: Path) -> list[str]:
                 errors.append("last-verified cannot be in the future")
         except ValueError:
             errors.append("last-verified must use YYYY-MM-DD")
+    code_basis = metadata.get("code-basis", "")
+    if code_basis and not (CODE_BASIS_RE.fullmatch(code_basis) or LEGACY_CODE_BASIS_RE.fullmatch(code_basis) or NO_GIT_CODE_BASIS_RE.fullmatch(code_basis)):
+        errors.append("code-basis has unsupported syntax")
     for key, value in metadata.items():
         if "|" in value or "\n" in value or "\r" in value:
             errors.append(f"metadata {key} must be a safe single-line value")
@@ -612,11 +665,13 @@ def validate_document(document: FeatureDocument, repo: Path) -> list[str]:
     if not change_entries:
         errors.append("change history must contain a '### YYYY-MM-DD — summary' entry")
     change_dates: list[dt.date] = []
+    completed_change_dates: list[dt.date] = []
     for index, entry in enumerate(change_entries):
+        parsed_change_date: dt.date | None = None
         try:
-            change_date = dt.date.fromisoformat(entry.group(1))
-            change_dates.append(change_date)
-            if change_date > dt.date.today():
+            parsed_change_date = dt.date.fromisoformat(entry.group(1))
+            change_dates.append(parsed_change_date)
+            if parsed_change_date > dt.date.today():
                 errors.append(f"change-history date cannot be in the future: {entry.group(1)}")
         except ValueError:
             errors.append(f"invalid change-history date: {entry.group(1)}")
@@ -631,6 +686,10 @@ def validate_document(document: FeatureDocument, repo: Path) -> list[str]:
             errors.append(
                 f"change-history entry {entry.group(1)} has unsupported status: {status_match.group(1)}"
             )
+        elif status_match and status_match.group(1) == "已完成" and parsed_change_date is not None:
+            completed_change_dates.append(parsed_change_date)
+    if verified_date and completed_change_dates and verified_date < max(completed_change_dates):
+        errors.append("last-verified cannot be earlier than the latest completed change")
     if len(change_dates) == len(change_entries) and change_dates != sorted(change_dates, reverse=True):
         errors.append("change-history entries must be sorted by date descending")
     for pattern in PLACEHOLDER_PATTERNS:
@@ -706,6 +765,24 @@ def command_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_validate_contract(args: argparse.Namespace) -> int:
+    repo = ensure_repo(args.repo)
+    documents = [doc for doc in discover_documents(repo) if doc.feature_id == args.feature_id]
+    if not documents:
+        raise FeatureDocsError(f"feature ID not found: {args.feature_id}")
+    all_errors: list[str] = []
+    for document in documents:
+        all_errors.extend(validate_contract_document(document, repo))
+        if args.mode == "fresh":
+            all_errors.extend(fresh_git_errors(document, repo))
+    if all_errors:
+        for error in all_errors:
+            print(f"ERROR\t{documents[0].path}\t{error}", file=sys.stderr)
+        return 1
+    print(f"OK\t{args.feature_id}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Create, find, and validate docs/features technical documents."
@@ -729,6 +806,11 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("--id", dest="feature_id", help="validate one feature plus catalog integrity")
     validate_parser.add_argument("--mode", choices=("structural", "fresh"), default="structural")
     validate_parser.set_defaults(handler=command_validate)
+    contract_parser = subparsers.add_parser("validate-contract", help="validate one Feature Doc without catalog checks")
+    contract_parser.add_argument("--repo", required=True, help="repository or workspace root")
+    contract_parser.add_argument("--id", dest="feature_id", required=True, help="feature ID")
+    contract_parser.add_argument("--mode", choices=("structural", "fresh"), default="structural")
+    contract_parser.set_defaults(handler=command_validate_contract)
     sync_parser = subparsers.add_parser("sync-index", help="rebuild the managed feature index")
     sync_parser.add_argument("--repo", required=True, help="repository or workspace root")
     sync_parser.set_defaults(handler=command_sync_index)

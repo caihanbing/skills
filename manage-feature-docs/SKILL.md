@@ -80,7 +80,7 @@ Red flags include words such as “short-term,” “normal,” “appropriate,�
 
 ## Create or update a document
 
-Read [references/document-contract.md](references/document-contract.md) before creating or updating a feature document. Read [references/regression-handoff.md](references/regression-handoff.md) only when user regression is required. Read [references/audit-policy.md](references/audit-policy.md) for an audit or `--mode fresh` validation.
+Read [references/document-contract.md](references/document-contract.md) before creating or updating a feature document. Read [references/regression-handoff.md](references/regression-handoff.md) only when auditing or normalizing a legacy document that already contains the regression section. Read [references/audit-policy.md](references/audit-policy.md) for an audit or `--mode fresh` validation.
 
 ### Create a new feature document
 
@@ -120,7 +120,9 @@ Run validation after every creation or update:
 python3 <skill-directory>/scripts/feature_docs.py validate --repo <repository-root> --id <feature-id> --mode structural
 ```
 
-Use `--mode fresh` to compare `code-basis` with the current Git implementation state. Run `sync-index --repo <repository-root>` after batch metadata edits. Do not repair unrelated user-authored prose merely to make it stylistically uniform.
+Use `--mode fresh` to compare `code-basis` with the current Git implementation state. Legacy `working-tree=dirty` metadata is structural-only and must be regenerated to the digest form before fresh handoff. Run `sync-index --repo <repository-root>` after batch metadata edits. Do not repair unrelated user-authored prose merely to make it stylistically uniform.
+
+Use `validate-contract --repo <repository-root> --id <feature-id>` when another Skill needs to validate one Feature Doc without imposing catalog or index checks.
 
 ## Prepare user regression handoff
 
