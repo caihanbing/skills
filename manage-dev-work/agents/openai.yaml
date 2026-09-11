@@ -1,0 +1,6 @@
+interface:
+  display_name: "Manage Development Work"
+  short_description: "管理研发工作项、质量门、需求追踪与跨会话交付状态"
+  default_prompt: "使用 $manage-dev-work 创建或推进当前需求、功能开发或 bug 修复的 Work Item。"
+policy:
+  allow_implicit_invocation: true

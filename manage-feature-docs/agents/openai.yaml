@@ -1,0 +1,6 @@
+interface:
+  display_name: "Manage Feature Docs"
+  short_description: "创建、核验和更新功能技术档案，恢复跨会话开发上下文"
+  default_prompt: "使用 $manage-feature-docs 读取或更新当前功能的技术档案，并基于代码核验关键信息。"
+policy:
+  allow_implicit_invocation: false
