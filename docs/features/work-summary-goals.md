@@ -6,7 +6,7 @@
 <!-- feature-status: active -->
 <!-- feature-summary: 面向季度目标、季度总结和年度总结的事实约束与风格化写作能力。 -->
 <!-- last-verified: 2026-10-08 -->
-<!-- code-basis: HEAD b9b70c86a20d; worktree-digest sha256:e926acc06dbadff60903547b4677630453d4aec76bc4ec432a8119312afda262 -->
+<!-- code-basis: HEAD 97eb9db5767e; worktree-digest sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 -->
 
 ## 快速上下文
 
