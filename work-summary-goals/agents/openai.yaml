@@ -1,0 +1,7 @@
+interface:
+  display_name: "工作总结与目标"
+  short_description: "基于事实撰写季度目标、季度总结与年度总结的正式文稿"
+  default_prompt: "使用 $work-summary-goals 根据我提供的工作材料撰写季度目标、季度总结或年度总结。"
+
+policy:
+  allow_implicit_invocation: true
