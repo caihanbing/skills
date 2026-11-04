@@ -1,0 +1,7 @@
+interface:
+  display_name: "多源租房研究"
+  short_description: "用地图、租房平台与租住体验证据发现和筛选房源"
+  default_prompt: "Use $multi-source-rental-research to discover nearby rental options and build an evidence-backed shortlist."
+
+policy:
+  allow_implicit_invocation: true
