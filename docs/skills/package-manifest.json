@@ -1,0 +1,277 @@
+{
+  "schema_version": 2,
+  "status": "CURRENT_SOURCE",
+  "revision": "team-source-config-missing-behavior-2026-11-04",
+  "package_id": "sha256:1c7570c449570c11f37d34051dd9079d7545eace09aebcec20e7cb86d0b5fbf2",
+  "identity": {
+    "format": "dms-team-runtime-v1",
+    "skills": [
+      "dms-commit-msg",
+      "dms-dev",
+      "dms-grill-me",
+      "dms-review-changes",
+      "dms-security-review",
+      "dms-spec-check",
+      "dms-systematic-debugging",
+      "dms-test-gate"
+    ],
+    "files": [
+      {
+        "path": "dms-commit-msg/SKILL.md",
+        "sha256": "8d463b2ed1ae62b40da770d0318aecda63ae6c68f634f3d2623057eee6554d7b"
+      },
+      {
+        "path": "dms-dev/SKILL.md",
+        "sha256": "cc7d78d830dbbf16e505133a58cb80b5d43e5b10b8ece855e47a74fac631ed67"
+      },
+      {
+        "path": "dms-dev/references/dms-project-context.md",
+        "sha256": "d8a39bd35348eecbe5d8a7665d7818b9a0cf187315ee4814706199444632a0cf"
+      },
+      {
+        "path": "dms-dev/references/execution-policy.md",
+        "sha256": "86751b96528ea59103073bc09d2e4d2a9ac13e805f510b1084c292f745230ff9"
+      },
+      {
+        "path": "dms-dev/references/task-contract.md",
+        "sha256": "a84a7e2c9bdb17b441d589a7ac1f3a524dd2bc3ec22b8cd7ea59cfbfedb03058"
+      },
+      {
+        "path": "dms-dev/references/workflow-contract.md",
+        "sha256": "8205cca621a9c872cf86c60fd8648d0d29e91267d4d5a060593eae66630f1be2"
+      },
+      {
+        "path": "dms-grill-me/SKILL.md",
+        "sha256": "738972c0be72cdaee90d38231c6840a671d5a53855d1e33b18dfe7cb2eb155e2"
+      },
+      {
+        "path": "dms-review-changes/SKILL.md",
+        "sha256": "2d28106821ff92a807ddcb6098954bae93e91e4716f0e7c3dd0b37d5352d1824"
+      },
+      {
+        "path": "dms-review-changes/references/angles.md",
+        "sha256": "d7682b18f9aa050a6bb0fb8ea004169615aa84fd1c2957f9b59ebbc52d92ed17"
+      },
+      {
+        "path": "dms-review-changes/references/mr-output.md",
+        "sha256": "7ce07fa85298e2fff1198f2bf3e1f84e55635da6aac77f5590cee6e06d67bd6b"
+      },
+      {
+        "path": "dms-review-changes/references/review-pitfalls.md",
+        "sha256": "c3d50410f64dbec7225e2525093c16b0ca99a8bd8f9caa508ac1242013f762f9"
+      },
+      {
+        "path": "dms-security-review/SKILL.md",
+        "sha256": "ff53483cc94e675cb6cc673aaa79fb1ec4326c05947c5f5e0d0b8f25b359ed21"
+      },
+      {
+        "path": "dms-spec-check/SKILL.md",
+        "sha256": "5649354f09ab1026ddc120b6aee6cb3370d254718dafa2e96672dd3ca4d9b2df"
+      },
+      {
+        "path": "dms-systematic-debugging/SKILL.md",
+        "sha256": "ece608a404894e325203b7ed359a2059c55dbcb7676ba55fa269f9175b88ae67"
+      },
+      {
+        "path": "dms-systematic-debugging/references/condition-based-waiting.md",
+        "sha256": "4efb8690c6a2f1c23ae4a1d2a4cda4792900e430d84fbb5381de04801f82a74b"
+      },
+      {
+        "path": "dms-systematic-debugging/references/defense-in-depth.md",
+        "sha256": "71936b9da83e28b19cbf04748d6dbe25fbb46d94438cd730f07430d3f7c38b93"
+      },
+      {
+        "path": "dms-systematic-debugging/references/root-cause-tracing.md",
+        "sha256": "92b487b0abbbe962d55e36ad188e9d8010f15a14d910b1bc5e325725606b9522"
+      },
+      {
+        "path": "dms-test-gate/SKILL.md",
+        "sha256": "4bd501f20b2f9e62e489e148d7ae1d7a94e0366bf9636f5d6f338f9c0f17ca3c"
+      },
+      {
+        "path": "dms-test-gate/agents/test-analyst.md",
+        "sha256": "4732a8a6b6e05e9fce63524f8a7607bdf2f62ae939c3d0428d015169af0d54e9"
+      },
+      {
+        "path": "dms-test-gate/agents/test-reviewer.md",
+        "sha256": "622c63291ef621c77ee44761f0c02c0e4069ed53fd998298fc28eb1afc3906f4"
+      }
+    ]
+  },
+  "source_head": "bf56d042444a730ee13768c6ba40772498f4623e",
+  "runtime_files": [
+    {
+      "path": "dms-dev/SKILL.md",
+      "source": "docs/skills/dms-dev/SKILL.md",
+      "sha256": "cc7d78d830dbbf16e505133a58cb80b5d43e5b10b8ece855e47a74fac631ed67"
+    },
+    {
+      "path": "dms-dev/references/dms-project-context.md",
+      "source": "docs/skills/dms-dev/references/dms-project-context.md",
+      "sha256": "d8a39bd35348eecbe5d8a7665d7818b9a0cf187315ee4814706199444632a0cf"
+    },
+    {
+      "path": "dms-dev/references/execution-policy.md",
+      "source": "docs/skills/dms-dev/references/execution-policy.md",
+      "sha256": "86751b96528ea59103073bc09d2e4d2a9ac13e805f510b1084c292f745230ff9"
+    },
+    {
+      "path": "dms-dev/references/task-contract.md",
+      "source": "docs/skills/dms-dev/references/task-contract.md",
+      "sha256": "a84a7e2c9bdb17b441d589a7ac1f3a524dd2bc3ec22b8cd7ea59cfbfedb03058"
+    },
+    {
+      "path": "dms-dev/references/workflow-contract.md",
+      "source": "docs/skills/dms-dev/references/workflow-contract.md",
+      "sha256": "8205cca621a9c872cf86c60fd8648d0d29e91267d4d5a060593eae66630f1be2"
+    },
+    {
+      "path": "dms-grill-me/SKILL.md",
+      "source": "docs/skills/dms-grill-me/SKILL.md",
+      "sha256": "738972c0be72cdaee90d38231c6840a671d5a53855d1e33b18dfe7cb2eb155e2"
+    },
+    {
+      "path": "dms-spec-check/SKILL.md",
+      "source": "docs/skills/dms-spec-check/SKILL.md",
+      "sha256": "5649354f09ab1026ddc120b6aee6cb3370d254718dafa2e96672dd3ca4d9b2df"
+    },
+    {
+      "path": "dms-systematic-debugging/SKILL.md",
+      "source": "docs/skills/dms-systematic-debugging/SKILL.md",
+      "sha256": "ece608a404894e325203b7ed359a2059c55dbcb7676ba55fa269f9175b88ae67"
+    },
+    {
+      "path": "dms-systematic-debugging/references/condition-based-waiting.md",
+      "source": "docs/skills/dms-systematic-debugging/references/condition-based-waiting.md",
+      "sha256": "4efb8690c6a2f1c23ae4a1d2a4cda4792900e430d84fbb5381de04801f82a74b"
+    },
+    {
+      "path": "dms-systematic-debugging/references/defense-in-depth.md",
+      "source": "docs/skills/dms-systematic-debugging/references/defense-in-depth.md",
+      "sha256": "71936b9da83e28b19cbf04748d6dbe25fbb46d94438cd730f07430d3f7c38b93"
+    },
+    {
+      "path": "dms-systematic-debugging/references/root-cause-tracing.md",
+      "source": "docs/skills/dms-systematic-debugging/references/root-cause-tracing.md",
+      "sha256": "92b487b0abbbe962d55e36ad188e9d8010f15a14d910b1bc5e325725606b9522"
+    },
+    {
+      "path": "dms-test-gate/SKILL.md",
+      "source": "docs/skills/dms-test-gate/SKILL.md",
+      "sha256": "4bd501f20b2f9e62e489e148d7ae1d7a94e0366bf9636f5d6f338f9c0f17ca3c"
+    },
+    {
+      "path": "dms-test-gate/agents/test-analyst.md",
+      "source": "docs/skills/dms-test-gate/agents/test-analyst.md",
+      "sha256": "4732a8a6b6e05e9fce63524f8a7607bdf2f62ae939c3d0428d015169af0d54e9"
+    },
+    {
+      "path": "dms-test-gate/agents/test-reviewer.md",
+      "source": "docs/skills/dms-test-gate/agents/test-reviewer.md",
+      "sha256": "622c63291ef621c77ee44761f0c02c0e4069ed53fd998298fc28eb1afc3906f4"
+    },
+    {
+      "path": "dms-review-changes/SKILL.md",
+      "source": "docs/skills/dms-review-changes/SKILL.md",
+      "sha256": "2d28106821ff92a807ddcb6098954bae93e91e4716f0e7c3dd0b37d5352d1824"
+    },
+    {
+      "path": "dms-review-changes/references/angles.md",
+      "source": "docs/skills/dms-review-changes/references/angles.md",
+      "sha256": "d7682b18f9aa050a6bb0fb8ea004169615aa84fd1c2957f9b59ebbc52d92ed17"
+    },
+    {
+      "path": "dms-review-changes/references/mr-output.md",
+      "source": "docs/skills/dms-review-changes/references/mr-output.md",
+      "sha256": "7ce07fa85298e2fff1198f2bf3e1f84e55635da6aac77f5590cee6e06d67bd6b"
+    },
+    {
+      "path": "dms-review-changes/references/review-pitfalls.md",
+      "source": "docs/skills/dms-review-changes/references/review-pitfalls.md",
+      "sha256": "c3d50410f64dbec7225e2525093c16b0ca99a8bd8f9caa508ac1242013f762f9"
+    },
+    {
+      "path": "dms-commit-msg/SKILL.md",
+      "source": "docs/skills/dms-commit-msg/SKILL.md",
+      "sha256": "8d463b2ed1ae62b40da770d0318aecda63ae6c68f634f3d2623057eee6554d7b"
+    },
+    {
+      "path": "dms-security-review/SKILL.md",
+      "source": "docs/skills/dms-security-review/SKILL.md",
+      "sha256": "ff53483cc94e675cb6cc673aaa79fb1ec4326c05947c5f5e0d0b8f25b359ed21"
+    }
+  ],
+  "runtime_file_count": 20,
+  "skills": [
+    "dms-commit-msg",
+    "dms-dev",
+    "dms-grill-me",
+    "dms-review-changes",
+    "dms-security-review",
+    "dms-spec-check",
+    "dms-systematic-debugging",
+    "dms-test-gate"
+  ],
+  "installation_mode": "copy-source-bytes-without-rewriting",
+  "excluded_material": [
+    "validation records and historical artifacts",
+    "historical Codex adapter templates"
+  ],
+  "project_dependencies": "project_documents 随运行文件和清单在同一批仓库交付中提供，保留原路径和原文；project_context_files 按目标 checkout 读取，不固定业务源码版本。安装前按清单核对依赖，不向 Skill 目录另复制规范。",
+  "name_migration": {
+    "grill-me": "dms-grill-me",
+    "spec-check": "dms-spec-check",
+    "systematic-debugging": "dms-systematic-debugging",
+    "test-gate": "dms-test-gate",
+    "review-changes": "dms-review-changes",
+    "commit-msg": "dms-commit-msg",
+    "security-review": "dms-security-review"
+  },
+  "validation_record": "docs/skills/README.md",
+  "delivery_revision": "team-install-docs-2026-11-04-r5",
+  "project_documents": [
+    {
+      "path": "config/coding-guidelines/README.md",
+      "sha256": "8915b74afe461f83a322255e1904b586abb8e7d9123f8a75dea480fc63fc285f"
+    },
+    {
+      "path": "config/coding-guidelines/coding-guidelines.md",
+      "sha256": "fdac6d89f84f63af3674724a45bfa659bc8c6bfa1a115c00962f1e68bd5f73e8"
+    },
+    {
+      "path": "config/coding-guidelines/coding-guidelines-custom.md",
+      "sha256": "ef884324693a7aea5e595f8310e62ad8ee214cda311b7b939cc645ba7adb734d"
+    },
+    {
+      "path": "config/coding-guidelines/coding-guidelines-gray-deployment.md",
+      "sha256": "2950c860d53a4d2f5588cdd467fbbb8e3245ab3ac874592be661f1c38a7ad4b9"
+    },
+    {
+      "path": "docs/code-quality/设计文档组织与归档规范.md",
+      "sha256": "3252e0730d65d0a86a861892af66ab3a8768d8d92680d793551dada7041b73c7"
+    },
+    {
+      "path": "docs/code-quality/研发流程必做项.md",
+      "sha256": "9ecffdb9185c21f94f159e51d218961908b6486a6aa77a0f4ed73b1063f06357"
+    },
+    {
+      "path": "docs/code-quality/团队协作规范.md",
+      "sha256": "0f2c9f42618672f926f364b5b085a17ca4a325f38aeca8a564e1eb4c9f22a3a8"
+    },
+    {
+      "path": "docs/code-quality/审查记录规范.md",
+      "sha256": "7acedba6ba58568d1bbe71c166c68110af14e7e4cc5296cf4796cd719c5df9ad"
+    },
+    {
+      "path": "docs/code-quality/研发流程落实保障措施.md",
+      "sha256": "1dc1b35945809649b99457637fdce05a6eb17f02c0e68ff2a5524ef92da549c6"
+    }
+  ],
+  "project_context_files": [
+    "README.md",
+    "pom.xml",
+    "config/checkstyle/checkstyle.xml",
+    "config/checkstyle/suppressions.xml"
+  ],
+  "delivery_validation_record": "docs/skills/README.md"
+}
