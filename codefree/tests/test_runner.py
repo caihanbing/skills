@@ -171,3 +171,26 @@ class RunnerTests(unittest.TestCase):
         self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake,ok=False)
 
 if __name__ == '__main__': unittest.main()
+
+class ConstraintTests(RunnerTests):
+    def test_completed_task_cannot_run_again(self):
+        self.prepare()
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.call('record-review','--record',self.record,'--result','passed','--evidence','ok','--progress','yes','--baseline-reviewed')
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake,ok=False)
+
+    def test_unreviewed_plan_cannot_change(self):
+        self.prepare()
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--criteria','x','--authorization','x','--verify','x',ok=False)
+
+    def test_review_rejects_external_change(self):
+        self.prepare()
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        (self.project/'tracked').write_text('external change')
+        self.call('record-review','--record',self.record,'--result','passed','--evidence','ok','--progress','yes','--baseline-reviewed',ok=False)
+
+    def test_auto_is_default(self):
+        self.prepare()
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.assertIn('--auto',json.loads((self.root/'args').read_text()))

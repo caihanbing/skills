@@ -51,6 +51,8 @@ def snapshot(project, target, paths=None):
         status = git(project, 'status', '--porcelain=v1', '-z', '--untracked-files=all').stdout
         (target/'status').write_bytes(status)
         raw = (git(project, 'diff', '--name-only', '-z').stdout + git(project, 'diff', '--cached', '--name-only', '-z').stdout + git(project, 'ls-files', '-z', '--others', '--exclude-standard').stdout)
+        changed_names = {os.fsdecode(x) for x in raw.split(b'\0') if x}
+        raw += git(project, 'ls-files', '-z').stdout
         names = [os.fsdecode(x) for x in raw.split(b'\0') if x]
     else:
         if not paths: raise ValueError('non-Git project requires --paths-file')
@@ -66,9 +68,10 @@ def snapshot(project, target, paths=None):
         elif src.is_file():
             data = src.read_bytes()
             manifest[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'mode': src.stat().st_mode & 0o777}
-            dst = target/'files'/rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_bytes(data)
+            if not is_git or name in changed_names:
+                dst = target/'files'/rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes(data)
         elif src.exists():
             raise ValueError('snapshot paths must be files or symlinks: ' + name)
         else: manifest[name] = {'missing': True}
@@ -115,6 +118,8 @@ def prepare(args):
     plan = Path(args.plan).read_bytes()
     if state_path(args).exists():
         state = load(args); ensure_idle(state)
+        if state.get('version') != 2: raise ValueError('legacy record is read-only')
+        if state.get('phase') not in ('ready', 'needs_fix'): raise ValueError('task state does not allow plan changes')
         if state['project'] != str(project): raise ValueError('project mismatch')
         if state['title'] != args.title: raise ValueError('task title mismatch')
     else:
@@ -126,7 +131,7 @@ def prepare(args):
             paths_file = str(record/'paths.txt')
             Path(paths_file).write_bytes(Path(args.paths_file).read_bytes())
         digest = snapshot(project, record/'snapshots'/'baseline', paths_file)
-        state = dict(project=str(project), title=args.title, paths_file=paths_file, round=0, session=None, recovery=0, no_progress=0, process=None, expected_snapshot=digest, last_review=None, plan_version=0, model=None)
+        state = dict(version=2, phase='ready', project=str(project), title=args.title, paths_file=paths_file, round=0, session=None, recovery=0, no_progress=0, process=None, expected_snapshot=digest, last_review=None, plan_version=0, model=None)
     state['plan_version'] += 1
     number = state['plan_version']
     planpath = record/'plans'/('plan-%03d.txt' % number)
@@ -139,6 +144,8 @@ def prepare(args):
 
 def run(args):
     state = load(args); ensure_idle(state)
+    if state.get('version') != 2: raise ValueError('legacy record is read-only')
+    if state.get('phase') not in ('ready', 'needs_fix'): raise ValueError('task state does not allow execution')
     if state['no_progress'] >= 3: raise ValueError('three rounds without progress; pause')
     if state.get('last_run', {}).get('issues'):
         if not args.recovery_evidence or not (args.rebuild or args.retry): raise ValueError('previous run failed; review and provide recovery evidence')
@@ -155,7 +162,7 @@ def run(args):
     finally: shutil.rmtree(checkdir, ignore_errors=True)
     if current != state['expected_snapshot']: raise ValueError('workspace changed since last snapshot; inspect before continuing')
     model = resolve_model(args.cli, args.model or state['model'] or 'glm5.3')
-    if state['model'] and model != state['model'] and not args.model: raise ValueError('model changed without explicit request')
+    if state['model'] and model != state['model'] : raise ValueError('model changed; create a new task')
     state['model'] = model
     state['round'] += 1
     n = state['round']; rounddir = record/'rounds'/('%03d' % n); rounddir.mkdir(parents=True)
@@ -164,8 +171,9 @@ def run(args):
     cmd = [args.cli, 'run', '--dir', str(project), '--model', model, '--format', 'json']
     if state['session']: cmd += ['--session', state['session']]
     else: cmd += ['--title', state['title'] + (' · 恢复 %d' % state['recovery'] if state['recovery'] else '')]
-    if args.auto: cmd.append('--auto')
+    cmd.append('--auto')
     write_json(rounddir/'invocation.json', {'model': model, 'session': state['session'], 'title': cmd[cmd.index('--title')+1] if '--title' in cmd else None, 'auto': args.auto, 'plan_version': state['plan_version']})
+    state['phase'] = 'running'
     state['process'] = {'pid': None, 'round': n, 'started': time.time()}
     save(args, state)
     new_session = not state['session']
@@ -177,6 +185,7 @@ def run(args):
     state['process'] = None
     state['expected_snapshot'] = snapshot(project, record/'snapshots'/('round-%03d' % n), state['paths_file'])
     state['last_review'] = None
+    state['phase'] = 'awaiting_review'
     issues = []
     try:
         with (rounddir/'events.jsonl').open(encoding='utf-8') as stream: sid = parse_events(stream, state['session'])
@@ -198,9 +207,16 @@ def run(args):
 
 def review(args):
     state = load(args); ensure_idle(state)
+    if state.get('version') != 2: raise ValueError('legacy record is read-only')
+    if state.get('phase') != 'awaiting_review': raise ValueError('no unreviewed round')
+    if args.result == 'passed' and state.get('last_run', {}).get('issues'): raise ValueError('failed run cannot pass review')
     if not state['round'] or state['last_review'] is not None: raise ValueError('no unreviewed round')
     if not args.baseline_reviewed: raise ValueError('review baseline preservation before recording review')
     record = Path(args.record).resolve()
+    checkdir = record/'snapshots'/('review-check-%s' % time.time_ns())
+    try: current = snapshot(Path(state['project']), checkdir, state['paths_file'])
+    finally: shutil.rmtree(checkdir, ignore_errors=True)
+    if current != state['expected_snapshot'] and args.result != 'blocked': raise ValueError('workspace changed since round ended')
     baseline = record/'snapshots'/'baseline'
     manifest = json.loads((baseline/'manifest.json').read_text(encoding='utf-8'))
     missing = [name for name, item in manifest.items() if 'missing' not in item and not (Path(state['project'])/name).exists() and not (Path(state['project'])/name).is_symlink()]
@@ -211,8 +227,11 @@ def review(args):
         if current_index != baseline_index.read_bytes(): raise ValueError('pre-existing staged changes differ from baseline; inspect before continuing')
     entry = {'baseline_reviewed': True, 'result': args.result, 'evidence': args.evidence, 'progress': args.progress, 'round': state['round']}
     write_json(Path(args.record).resolve()/'rounds'/('%03d' % state['round'])/'review.json', entry)
+    entry.update(plan_version=state['plan_version'], model=state['model'])
     state['last_review'] = entry
+    state['phase'] = {'passed': 'completed', 'failed': 'needs_fix', 'blocked': 'blocked'}[args.result]
     state['no_progress'] = 0 if args.progress == 'yes' else state['no_progress'] + 1
+    if state['no_progress'] >= 3 and state['phase'] == 'needs_fix': state['phase'] = 'paused'
     save(args, state)
     return {'ok': True, 'round': state['round'], 'no_progress': state['no_progress']}
 
@@ -253,8 +272,8 @@ def main():
             lock = stack.enter_context((lockdir/lockname).open('a'))
             try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError: raise ValueError('another operation is active for this record')
-            if args.command == 'run':
-                project = load(args)['project']
+            if args.command in ('prepare', 'run', 'record-review') or (args.command == 'status' and args.reconcile):
+                project = str(Path(args.project).resolve()) if args.command == 'prepare' else load(args)['project']
                 project_lock = stack.enter_context((lockdir/('project-' + hashlib.sha256(os.fsencode(project)).hexdigest())).open('a'))
                 try: fcntl.flock(project_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError: raise ValueError('another task is active in this project')
