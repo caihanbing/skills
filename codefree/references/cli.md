@@ -4,12 +4,20 @@
 
 首次准备：计划文件包含已确认计划及修订；验收、授权和验证参数填写具体内容。非 Git 目录必须传 `--paths-file` 指向每行一个项目相对文件路径的清单；Git 项目应指定仓库根目录。
 
+`--tasks-file` 是 UTF-8 JSON，形如：
+
+```json
+{"version":1,"tasks":[{"id":"T1","title":"校验空名称","goal":"拒绝空名称并返回明确错误","targets":["src/main.py"],"depends_on":[],"steps":["在保存前检查名称去除空白后是否为空","补充空名称测试"],"acceptance":["仅含空白的名称被拒绝且不会保存"],"verification":[{"command":"python3 -m unittest tests.test_names","expected":"全部测试通过，包括空名称用例"}]}]}
+```
+
+依赖只能引用之前的 ID。每项必须填写具体内容；运行器检查结构，Codex 负责核验内容是否足够具体。首次、计划更新和重建时运行器合成完整交接，普通续接的 handoff 应包含任务 ID、问题证据和复验要求。项目规则与已有修改保护细节放入首次和重建的 handoff。
+
 ```sh
-python3 "$runner" prepare --record "$record" --project "$project_dir" --title "$task_title" --plan "$plan_file" --criteria "$criteria" --authorization "$authorization" --verify "$verify"
+python3 "$runner" prepare --record "$record" --project "$project_dir" --title "$task_title" --plan "$plan_file" --tasks-file "$tasks_file" --criteria "$criteria" --authorization "$authorization" --verify "$verify"
 python3 "$runner" run --record "$record" --handoff "$handoff_file"
 ```
 
-运行器解析 `glm5.3` 为模型列表中的唯一完整标识，也可用 `--model` 指定模型；不存在或歧义时停止，不替换模型。同一任务保持相同模型。新建会话以任务名传 `--title`，完成后在项目目录查询会话列表核对名称；续接始终使用确切 `--session`，不用 `--continue`。只有已有授权允许自动批准时才显式加 `--auto`，不得扩大授权。等待进程结束，读取摘要，失败时检查原始证据。
+运行器解析 `glm5.3` 为模型列表中的唯一完整标识，也可用 `--model` 指定模型；不存在或歧义时停止，不替换模型。同一任务保持相同模型。新建会话以任务名传 `--title`，完成后在项目目录查询会话列表核对名称；续接始终使用确切 `--session`，不用 `--continue`。运行器默认传 `--auto`，派发前确认用户授权覆盖自动批准，交接不得扩大授权。等待进程结束，读取摘要，失败时检查原始证据。
 
 每轮必须审查 `snapshots/baseline` 和本轮快照：比较 HEAD、暂存和工作区差异、未跟踪文件与内容，确认原有修改未被覆盖，并按验收项检查实际产物和验证结果。未确认保留时停止并报告，不记录通过或继续派发。审核完成后记录证据和有无实质进展，才能续接：
 

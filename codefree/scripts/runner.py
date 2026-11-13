@@ -111,15 +111,36 @@ def ensure_idle(state):
         raise ValueError('interrupted process requires manual reconciliation; inspect logs and workspace')
 
 
+def validate_tasks(path):
+    data = json.loads(Path(path).read_text(encoding='utf-8'))
+    if not isinstance(data, dict) or data.get('version') != 1 or not isinstance(data.get('tasks'), list) or not data['tasks']:
+        raise ValueError('tasks must contain a nonempty version 1 task list')
+    seen = set()
+    for task in data['tasks']:
+        if not isinstance(task, dict): raise ValueError('invalid task')
+        for key in ('id', 'title', 'goal'):
+            if not isinstance(task.get(key), str) or not task[key].strip(): raise ValueError('missing task field: ' + key)
+        if task['id'] in seen: raise ValueError('duplicate task id')
+        for key in ('targets', 'steps', 'acceptance'):
+            if not isinstance(task.get(key), list) or not task[key] or any(not isinstance(x, str) or not x.strip() for x in task[key]): raise ValueError('invalid task field: ' + key)
+        deps = task.get('depends_on')
+        if not isinstance(deps, list) or any(not isinstance(x, str) or x not in seen for x in deps): raise ValueError('invalid task dependencies')
+        checks = task.get('verification')
+        if not isinstance(checks, list) or not checks or any(not isinstance(x, dict) or any(not isinstance(x.get(k), str) or not x[k].strip() for k in ('command', 'expected')) for x in checks): raise ValueError('invalid task verification')
+        seen.add(task['id'])
+    return data
+
+
 def prepare(args):
     project = Path(args.project).resolve(strict=True)
     record = Path(args.record).resolve()
     if record == project or project in record.parents: raise ValueError('record must be outside project')
     plan = Path(args.plan).read_bytes()
+    tasks = validate_tasks(args.tasks_file)
     if state_path(args).exists():
         state = load(args); ensure_idle(state)
         if state.get('version') != 2: raise ValueError('legacy record is read-only')
-        if state.get('phase') not in ('ready', 'needs_fix'): raise ValueError('task state does not allow plan changes')
+        if state.get('phase') not in ('ready', 'needs_fix') and not (state.get('phase') == 'blocked' and state.get('last_review')): raise ValueError('task state does not allow plan changes')
         if state['project'] != str(project): raise ValueError('project mismatch')
         if state['title'] != args.title: raise ValueError('task title mismatch')
     else:
@@ -137,6 +158,8 @@ def prepare(args):
     planpath = record/'plans'/('plan-%03d.txt' % number)
     planpath.parent.mkdir(parents=True, exist_ok=True)
     planpath.write_bytes(plan)
+    write_json(record/'plans'/('tasks-%03d.json' % number), tasks)
+    state['tasks_version'] = number
     state.update(plan_sha256=hashlib.sha256(plan).hexdigest(), criteria=args.criteria, authorization=args.authorization, verify=args.verify)
     save(args, state)
     return {'ok': True, 'record': str(record), 'plan_version': number, 'plan_sha256': state['plan_sha256']}
@@ -145,7 +168,8 @@ def prepare(args):
 def run(args):
     state = load(args); ensure_idle(state)
     if state.get('version') != 2: raise ValueError('legacy record is read-only')
-    if state.get('phase') not in ('ready', 'needs_fix'): raise ValueError('task state does not allow execution')
+    if state.get('phase') not in ('ready', 'needs_fix') and not (state.get('phase') == 'blocked' and state.get('last_review') and state.get('last_run', {}).get('issues') and (args.retry or args.rebuild) and args.recovery_evidence): raise ValueError('task state does not allow execution')
+    if state.get('tasks_version') != state.get('plan_version'): raise ValueError('prepare a task list before execution')
     if state['no_progress'] >= 3: raise ValueError('three rounds without progress; pause')
     if state.get('last_run', {}).get('issues'):
         if not args.recovery_evidence or not (args.rebuild or args.retry): raise ValueError('previous run failed; review and provide recovery evidence')
@@ -165,14 +189,26 @@ def run(args):
     if state['model'] and model != state['model'] : raise ValueError('model changed; create a new task')
     state['model'] = model
     state['round'] += 1
-    n = state['round']; rounddir = record/'rounds'/('%03d' % n); rounddir.mkdir(parents=True)
-    handoff = Path(args.handoff).read_bytes(); (rounddir/'handoff.txt').write_bytes(handoff)
+    n = state['round']; rounddir = record/'rounds'/('%03d' % n)
+    extra = Path(args.handoff).read_text(encoding='utf-8')
+    context_path = record/'context.txt'
+    context = context_path.read_text(encoding='utf-8') if context_path.exists() else extra
+    full = not state['session'] or args.rebuild or state.get('last_sent_plan_version') != state['plan_version']
+    if full:
+        plan = (record/'plans'/('plan-%03d.txt' % state['plan_version'])).read_text(encoding='utf-8')
+        tasks_path = record/'plans'/('tasks-%03d.json' % state['plan_version'])
+        tasks = validate_tasks(tasks_path)
+        handoff = ('按顺序执行以下任务；遇到未决行为问题停止。保护用户已有修改，按验收和验证要求反馈。\n计划:\n' + plan + '\n任务:\n' + json.dumps(tasks, ensure_ascii=False, indent=2) + '\n验收:\n' + state['criteria'] + '\n授权:\n' + state['authorization'] + '\n验证:\n' + state['verify'] + '\n项目规则及原始上下文:\n' + context + ('\n本轮补充:\n' + extra if context != extra else ''))
+    else: handoff = extra
+    rounddir.mkdir(parents=True)
+    if not context_path.exists(): context_path.write_text(context, encoding='utf-8')
+    (rounddir/'handoff.txt').write_text(handoff, encoding='utf-8')
     if args.recovery_evidence: (rounddir/'recovery-evidence.txt').write_text(args.recovery_evidence, encoding='utf-8')
     cmd = [args.cli, 'run', '--dir', str(project), '--model', model, '--format', 'json']
     if state['session']: cmd += ['--session', state['session']]
     else: cmd += ['--title', state['title'] + (' · 恢复 %d' % state['recovery'] if state['recovery'] else '')]
     cmd.append('--auto')
-    write_json(rounddir/'invocation.json', {'model': model, 'session': state['session'], 'title': cmd[cmd.index('--title')+1] if '--title' in cmd else None, 'auto': args.auto, 'plan_version': state['plan_version']})
+    write_json(rounddir/'invocation.json', {'model': model, 'session': state['session'], 'title': cmd[cmd.index('--title')+1] if '--title' in cmd else None, 'auto': True, 'plan_version': state['plan_version']})
     state['phase'] = 'running'
     state['process'] = {'pid': None, 'round': n, 'started': time.time()}
     save(args, state)
@@ -201,6 +237,7 @@ def run(args):
     except (ValueError, UnicodeError) as e: issues.append(str(e))
     if rc: issues.append('exit code %d' % rc)
     state['last_run'] = {'exit_code': rc, 'issues': issues, 'round_dir': str(rounddir)}
+    state['last_sent_plan_version'] = state['plan_version']
     save(args, state)
     return {'ok': not issues, 'round': n, 'session': state['session'], 'issues': issues, 'evidence': str(rounddir), 'review_required': True}
 
@@ -239,6 +276,7 @@ def review(args):
 def status(args):
     state = load(args)
     if args.reconcile:
+        if state.get('version') != 2: raise ValueError('legacy record is read-only')
         if not args.evidence: raise ValueError('reconciliation requires evidence')
         proc = state.get('process')
         if not proc: raise ValueError('no interrupted process to reconcile')
@@ -248,6 +286,7 @@ def status(args):
         state['expected_snapshot'] = snapshot(Path(state['project']), target, state['paths_file'])
         state['process'] = None
         state['last_review'] = None
+        state['phase'] = 'awaiting_review'
         state['last_run'] = {'round_dir': str(Path(args.record).resolve()/'rounds'/('%03d' % n)), 'issues': ['interrupted: ' + args.evidence]}
         save(args, state)
     return {'ok': True, **state}
@@ -256,7 +295,7 @@ def status(args):
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest='command', required=True)
-    p = sub.add_parser('prepare'); p.add_argument('--record', required=True); p.add_argument('--project', required=True); p.add_argument('--title', required=True); p.add_argument('--plan', required=True); p.add_argument('--criteria', required=True); p.add_argument('--authorization', required=True); p.add_argument('--verify', required=True); p.add_argument('--paths-file')
+    p = sub.add_parser('prepare'); p.add_argument('--record', required=True); p.add_argument('--project', required=True); p.add_argument('--title', required=True); p.add_argument('--plan', required=True); p.add_argument('--tasks-file', required=True); p.add_argument('--criteria', required=True); p.add_argument('--authorization', required=True); p.add_argument('--verify', required=True); p.add_argument('--paths-file')
     p = sub.add_parser('run'); p.add_argument('--record', required=True); p.add_argument('--handoff', required=True); p.add_argument('--model'); p.add_argument('--cli', default='codefree-o'); p.add_argument('--auto', action='store_true'); recovery = p.add_mutually_exclusive_group(); recovery.add_argument('--rebuild', action='store_true'); recovery.add_argument('--retry', action='store_true'); p.add_argument('--recovery-evidence')
     p = sub.add_parser('record-review'); p.add_argument('--record', required=True); p.add_argument('--result', choices=['passed', 'failed', 'blocked'], required=True); p.add_argument('--evidence', required=True); p.add_argument('--progress', choices=['yes','no'], required=True); p.add_argument('--baseline-reviewed', action='store_true')
     p = sub.add_parser('status'); p.add_argument('--record', required=True); p.add_argument('--reconcile', action='store_true'); p.add_argument('--evidence'); p.add_argument('--confirmed-no-process', action='store_true')

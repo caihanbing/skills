@@ -2,6 +2,7 @@ import json
 import fcntl
 import hashlib
 import os
+import select
 from pathlib import Path
 import subprocess
 import sys
@@ -27,6 +28,8 @@ class RunnerTests(unittest.TestCase):
         self.record = self.root / 'record'
         self.plan = self.root / 'plan.txt'
         self.plan.write_text('task plan')
+        self.tasks = self.root / 'tasks.json'
+        self.tasks.write_text(json.dumps({'version': 1, 'tasks': [{'id': 't1', 'title': '标题', 'goal': '目标', 'targets': ['tracked'], 'depends_on': [], 'steps': ['修改文件'], 'acceptance': ['正确'], 'verification': [{'command': 'test -f tracked', 'expected': '成功'}]}]}, ensure_ascii=False))
         self.handoff = self.root / 'handoff.txt'
         self.handoff.write_text('literal $HOME `test` 中文\n')
         self.fake = self.root / 'fake'
@@ -39,13 +42,15 @@ class RunnerTests(unittest.TestCase):
         else: self.assertNotEqual(result.returncode, 0, result.stdout)
         return json.loads(result.stdout)
     def prepare(self):
-        return self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--criteria','criteria','--authorization','scope','--verify','test')
+        return self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','criteria','--authorization','scope','--verify','test')
     def test_first_run_title_stdin_and_resume(self):
         self.prepare()
         self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
         args=json.loads((self.root/'args').read_text())
         self.assertEqual(args[args.index('--title')+1], 'task title')
-        self.assertEqual((self.root/'input').read_text(), self.handoff.read_text())
+        self.assertIn('task plan', (self.root/'input').read_text())
+        self.assertIn('修改文件', (self.root/'input').read_text())
+        self.assertIn(self.handoff.read_text(), (self.root/'input').read_text())
         self.call('record-review','--record',self.record,'--result','failed','--evidence','failure','--progress','yes','--baseline-reviewed')
         self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
         args=json.loads((self.root/'args').read_text())
@@ -56,12 +61,59 @@ class RunnerTests(unittest.TestCase):
         (self.project/'tracked').write_text('concurrent edit')
         self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake,ok=False)
         self.assertFalse((self.root/'args').exists())
+
+    def test_empty_tasks_rejected_before_dispatch(self):
+        self.tasks.write_text('{"version": 1, "tasks": []}')
+        self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','criteria','--authorization','scope','--verify','test',ok=False)
+        self.assertFalse((self.root/'args').exists())
+
+    def test_invalid_task_fields_and_dependencies_are_rejected(self):
+        original = json.loads(self.tasks.read_text())
+        for mutation in ('missing', 'duplicate', 'dependency'):
+            data = json.loads(json.dumps(original))
+            if mutation == 'missing': del data['tasks'][0]['steps']
+            if mutation == 'duplicate': data['tasks'].append(dict(data['tasks'][0]))
+            if mutation == 'dependency': data['tasks'][0]['depends_on'] = ['later']
+            self.tasks.write_text(json.dumps(data))
+            self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','criteria','--authorization','scope','--verify','test',ok=False)
+
+    def test_resume_sends_only_feedback(self):
+        self.prepare()
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.call('record-review','--record',self.record,'--result','failed','--evidence','failure','--progress','yes','--baseline-reviewed')
+        self.handoff.write_text('T1: fix and retest')
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.assertEqual((self.root/'input').read_text(), 'T1: fix and retest')
+
+    def test_missing_handoff_does_not_consume_round(self):
+        self.prepare()
+        self.call('run','--record',self.record,'--handoff',self.root/'missing','--cli',self.fake,ok=False)
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+
+    def test_changed_plan_keeps_original_context(self):
+        self.prepare()
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.call('record-review','--record',self.record,'--result','failed','--evidence','failure','--progress','yes','--baseline-reviewed')
+        self.prepare()
+        self.handoff.write_text('T1 feedback')
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.assertIn('literal $HOME', (self.root/'input').read_text())
+        self.assertIn('T1 feedback', (self.root/'input').read_text())
+
+    def test_runner_emits_only_summary_after_delayed_execution(self):
+        self.prepare()
+        self.fake.write_text(self.fake.read_text().replace('else:\n open(', 'else:\n import time\n time.sleep(1)\n open('))
+        proc = subprocess.Popen([sys.executable, str(RUNNER), 'run', '--record', str(self.record), '--handoff', str(self.handoff), '--cli', str(self.fake)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(select.select([proc.stdout], [], [], 0.4)[0], [])
+        stdout, stderr = proc.communicate(timeout=10)
+        self.assertEqual(proc.returncode, 0, stderr.decode())
+        self.assertTrue(json.loads(stdout)['ok'])
     def test_record_outside_project_and_baseline(self):
         self.prepare()
         state=self.call('status','--record',self.record)
         self.assertEqual(state['round'],0)
         self.assertTrue((self.record/'snapshots'/'baseline'/'files'/'untracked').exists())
-        self.call('prepare','--record',self.project/'record','--project',self.project,'--title','x','--plan',self.plan,'--criteria','c','--authorization','a','--verify','v',ok=False)
+        self.call('prepare','--record',self.project/'record','--project',self.project,'--title','x','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','c','--authorization','a','--verify','v',ok=False)
     def test_wrong_session_title_fails(self):
         self.prepare()
         self.fake.write_text(self.fake.read_text().replace('"title":"task title"', '"title":"wrong"'))
@@ -162,6 +214,8 @@ class RunnerTests(unittest.TestCase):
         state=self.call('status','--record',self.record)
         self.assertIsNone(state['process'])
         self.assertTrue(state['last_run']['issues'])
+        self.assertEqual(state['phase'], 'awaiting_review')
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake,'--rebuild','--recovery-evidence','lost',ok=False)
 
     def test_three_no_progress_stops(self):
         self.prepare()
@@ -182,7 +236,7 @@ class ConstraintTests(RunnerTests):
     def test_unreviewed_plan_cannot_change(self):
         self.prepare()
         self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
-        self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--criteria','x','--authorization','x','--verify','x',ok=False)
+        self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','x','--authorization','x','--verify','x',ok=False)
 
     def test_review_rejects_external_change(self):
         self.prepare()
