@@ -1,0 +1,4 @@
+interface:
+  display_name: "CodeFree"
+  short_description: "调用 codefree-o 执行计划并循环审查"
+  default_prompt: "使用 $codefree 执行已有计划，审查结果并持续修正。"

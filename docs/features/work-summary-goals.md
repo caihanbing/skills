@@ -5,8 +5,8 @@
 <!-- feature-aliases: 季度目标与总结, 季度总结写作 -->
 <!-- feature-status: active -->
 <!-- feature-summary: 面向季度目标、季度总结和年度总结的事实约束与风格化写作能力。 -->
-<!-- last-verified: 2026-10-08 -->
-<!-- code-basis: HEAD 97eb9db5767e; worktree-digest sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 -->
+<!-- last-verified: 2026-11-13 -->
+<!-- code-basis: HEAD 33525bf2eaee; worktree-digest sha256:ad4c684d6e32170bcfbb140112b845c738274d22a883f0908c069b34f8488020 -->
 
 ## 快速上下文
 
@@ -103,6 +103,8 @@
 
 ## 可观测性与运维
 
+- 本机 `~/.agents/skills/work-summary-goals` 和 `~/.codefree-o/.config/skills/work-summary-goals` 使用软链接指向仓库 `work-summary-goals/`；这是本机安装状态，仓库不自动创建链接。
+
 - 通过 Codex skill 自动发现状态和显式调用路径使用该功能。
 - 结构验证使用 `quick_validate.py`；行为验证使用独立上下文回归场景。
 - 维护源位于仓库 `work-summary-goals/`；`~/.codex/skills/work-summary-goals` 仅作为自动发现符号链接。
@@ -149,6 +151,14 @@
 不适用：当前没有已确认的功能档案漂移或未解决阻塞项；后续用户对目标扩展或总结结构的新反馈应通过 skill 回归场景维护。
 
 ## 变更记录
+
+### 2026-11-13 — 统一本机 skill 安装链接
+
+- **状态**：已完成
+- **变化**：本机安装改为指向仓库维护源的软链接，并增加 codefree-o 发现入口。
+- **原因**：保持单一维护源。
+- **兼容性**：skill 内容与调用名称不变。
+- **验证**：目录内容比对、链接目标核验及 `codefree-o debug skill` 发现检查。
 
 ### 2026-10-08 — 迁移并建立工作总结与目标 skill 档案
 

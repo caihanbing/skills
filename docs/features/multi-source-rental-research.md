@@ -5,8 +5,8 @@
 <!-- feature-aliases: 租房研究, 多源房源调研, rental research -->
 <!-- feature-status: active -->
 <!-- feature-summary: 通过城市适配的多源发现、Offer 级证据核验与结构化报告支持租房筛选和尽调。 -->
-<!-- last-verified: 2026-11-04 -->
-<!-- code-basis: HEAD e2efde495147; worktree-digest sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 -->
+<!-- last-verified: 2026-11-13 -->
+<!-- code-basis: HEAD 33525bf2eaee; worktree-digest sha256:ad4c684d6e32170bcfbb140112b845c738274d22a883f0908c069b34f8488020 -->
 
 ## 快速上下文
 
@@ -153,6 +153,8 @@
 
 ## 可观测性与运维
 
+- 本机 `~/.agents/skills/multi-source-rental-research` 和 `~/.codefree-o/.config/skills/multi-source-rental-research` 使用软链接指向仓库 `multi-source-rental-research/`；这是本机安装状态，仓库不自动创建链接。
+
 - 该 skill 无服务部署、数据库迁移、后台任务或需要重启的组件；本次文件复制与档案维护不需要用户回归。
 - Discovery 和 Evidence 校验输出结构化错误，Evidence 另输出 warnings 与时效状态；候选归一化返回重复置信等级和原因。
 - 研究报告记录检索日期、查询、入口或结果链接、访问状态、限制、来源类别与覆盖缺口，便于用户复核。
@@ -209,6 +211,14 @@
 - **后续动作**：在决定或签约前重新确认报价、库存、费用及合同条件；不把自动抓取能力假设为已交付。
 
 ## 变更记录
+
+### 2026-11-13 — 统一本机 skill 安装链接
+
+- **状态**：已完成
+- **变化**：本机安装改为指向仓库维护源的软链接，并增加 codefree-o 发现入口。
+- **原因**：保持单一维护源。
+- **兼容性**：skill 内容与调用名称不变。
+- **验证**：目录内容比对、链接目标核验及 `codefree-o debug skill` 发现检查。
 
 ### 2026-11-04 — 纳入多源租房研究 skill
 
