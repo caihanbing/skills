@@ -449,6 +449,48 @@ class ConstraintTests(RunnerFixture, unittest.TestCase):
         state=self.call('status','--record',self.record)
         self.assertIn('snapshot_error',state['last_review'])
 
+    def test_protected_index_removal_rejects_pass(self):
+        secret=self.project/'secret'; secret.write_text('private')
+        subprocess.run(['git','-C',str(self.project),'add','secret'],check=True)
+        subprocess.run(['git','-C',str(self.project),'commit','-qm','secret'],check=True)
+        protected=self.root/'protected'; protected.write_text('secret\n')
+        self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','c','--authorization','a','--verify','v','--protect-paths-file',protected)
+        original=self.fake.read_text(); snippet='else:\n import subprocess\n subprocess.run(["git","-C",'+repr(str(self.project))+',"rm","--cached","secret"],check=True,stdout=subprocess.DEVNULL)\n open('
+        self.fake.write_text(original.replace('else:\n open(',snippet))
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.call('record-review','--record',self.record,'--result','passed','--evidence','ok','--progress','yes','--baseline-reviewed',ok=False)
+        self.call('record-review','--record',self.record,'--result','blocked','--evidence','index changed','--progress','no','--baseline-reviewed')
+        subprocess.run(['git','-C',str(self.project),'add','secret'],check=True)
+        self.call('unblock','--record',self.record,'--evidence','restored')
+
+    def test_blank_review_evidence_rejected(self):
+        self.prepare(); self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.call('record-review','--record',self.record,'--result','passed','--evidence','  ','--progress','yes','--baseline-reviewed',ok=False)
+
+    def test_legacy_protected_index_requires_explicit_migration(self):
+        secret=self.project/'secret'; secret.write_text('private')
+        protected=self.root/'protected'; protected.write_text('secret\n')
+        args=('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','c','--authorization','a','--verify','v')
+        self.call(*args,'--protect-paths-file',protected)
+        statepath=self.record/'state.json'; state=json.loads(statepath.read_text()); del state['protected_index']; statepath.write_text(json.dumps(state))
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake,ok=False)
+        self.call(*args,ok=False)
+        self.call(*args,'--accept-current-protected-index','--protection-evidence','checked index')
+        state=self.call('status','--record',self.record)
+        self.assertEqual(state['protection_migrations'][0]['evidence'],'checked index')
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.call('record-review','--record',self.record,'--result','failed','--evidence','checked','--progress','yes','--baseline-reviewed')
+        self.call(*args,'--accept-current-protected-index','--protection-evidence','cannot reset',ok=False)
+
+    def test_protected_index_mode_change_rejected(self):
+        secret=self.project/'secret[1]'; secret.write_text('private')
+        subprocess.run(['git','-C',str(self.project),'add','--',':(literal)secret[1]'],check=True)
+        protected=self.root/'protected'; protected.write_text('secret[1]\n')
+        self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','c','--authorization','a','--verify','v','--protect-paths-file',protected)
+        subprocess.run(['git','-C',str(self.project),'update-index','--chmod=+x','--','secret[1]'],check=True)
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake,ok=False)
+        self.assertFalse((self.root/'args').exists())
+
     def test_auto_is_default(self):
         self.prepare()
         self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)

@@ -123,8 +123,23 @@ def state_snapshot(state, target):
     return snapshot(Path(state['project']), target, state['paths_file'], state.get('targets', []), state.get('protected', {}).keys())
 
 
+def protected_index_facts(project, names):
+    probe = git(project, 'rev-parse', '--show-toplevel', check=False)
+    if probe.returncode:
+        if (project / '.git').exists(): raise ValueError('cannot inspect Git index')
+        return None
+    if Path(os.fsdecode(probe.stdout.strip())).resolve() != project: raise ValueError('project must be Git root')
+    return {name: hashlib.sha256(git(project, 'ls-files', '--stage', '-z', '--', ':(literal)' + name).stdout).hexdigest() for name in names}
+
+
 def check_protected(state):
-    return protected_facts(Path(state['project']), state.get('protected', {}).keys()) == state.get('protected', {})
+    project = Path(state['project'])
+    protected = state.get('protected', {})
+    if protected_facts(project, protected.keys()) != protected: return False
+    current = protected_index_facts(project, protected.keys())
+    if current is None: return state.get('paths_file') is not None and state.get('protected_index') is None
+    if protected and 'protected_index' not in state: return False
+    return current == state.get('protected_index', {})
 
 
 def normalize(value): return re.sub(r'[^a-z0-9]', '', value.lower())
@@ -257,12 +272,23 @@ def prepare_existing(args):
         if state.get('phase') not in ('ready', 'needs_fix') and not (state.get('phase') == 'blocked' and state.get('last_review')): raise ValueError('task state does not allow plan changes')
         if state['project'] != str(project): raise ValueError('project mismatch')
         if state['title'] != args.title: raise ValueError('task title mismatch')
-        if not check_protected(state): raise ValueError('protected files changed')
+        protected_before = state.get('protected', {})
+        index_now = protected_index_facts(project, protected_before)
+        missing_index = bool(protected_before) and index_now is not None and 'protected_index' not in state
+        if args.accept_current_protected_index or args.protection_evidence:
+            if not (missing_index and args.accept_current_protected_index and args.protection_evidence and args.protection_evidence.strip()):
+                raise ValueError('index migration requires an old record and nonempty evidence')
+            if protected_facts(project, protected_before) != protected_before: raise ValueError('protected files changed')
+            state['protected_index'] = index_now
+            state.setdefault('protection_migrations', []).append({'evidence': args.protection_evidence, 'time': time.time(), 'paths': sorted(protected_before)})
+        elif missing_index: raise ValueError('protected index baseline missing; explicit migration required')
+        if not check_protected(state): raise ValueError('protected files or index changed')
         check = record/'snapshots'/('prepare-check-%s' % time.time_ns())
         try: current = state_snapshot(state, check)
         finally: shutil.rmtree(check, ignore_errors=True)
         if current != state['expected_snapshot']: raise ValueError('workspace changed since last snapshot')
     else:
+        if args.accept_current_protected_index or args.protection_evidence: raise ValueError('index migration requires an old record')
         probe = git(project, 'ls-files', '--stage', '-z', check=False)
         if probe.returncode == 0 and any(item.startswith(b'160000 ') for item in probe.stdout.split(b'\0')):
             raise ValueError('Git submodules are not supported')
@@ -274,6 +300,7 @@ def prepare_existing(args):
             paths_file = str(record/'paths.txt')
             Path(paths_file).write_bytes(Path(args.paths_file).read_bytes())
         state = dict(version=2, phase='ready', project=str(project), title=args.title, paths_file=paths_file, targets=targets, protected=protected_facts(project, protected_names), baseline_protected=protected_names, round=0, session=None, recovery=0, no_progress=0, last_review=None, plan_version=0, model=None)
+        state['protected_index'] = protected_index_facts(project, protected_names)
         state['expected_snapshot'] = state_snapshot(state, record/'snapshots'/'baseline')
     protected = state.get('protected', {}).copy()
     for name in protected_names:
@@ -281,6 +308,12 @@ def prepare_existing(args):
     for name in protected:
         if any(Path(name) == Path(target) or Path(target) in Path(name).parents or Path(name) in Path(target).parents for target in targets):
             raise ValueError('protected path overlaps task target: ' + name)
+    index_facts = protected_index_facts(project, protected)
+    if index_facts is not None:
+        saved_index = state.get('protected_index') or {}
+        for name in protected:
+            if name not in saved_index: saved_index[name] = index_facts[name]
+        state['protected_index'] = saved_index
     combined_targets = sorted(set(state.get('targets', [])) | set(targets))
     state['auto_approve'] = args.auto_approve if args.auto_approve is not None else state.get('auto_approve', True)
     number = state['plan_version'] + 1
@@ -420,6 +453,7 @@ def review(args):
     if args.result == 'passed' and state.get('last_run', {}).get('issues'): raise ValueError('failed run cannot pass review')
     if not state['round'] or state['last_review'] is not None: raise ValueError('no unreviewed round')
     if not args.baseline_reviewed: raise ValueError('review baseline preservation before recording review')
+    if not args.evidence.strip(): raise ValueError('review evidence must not be empty')
     record = Path(args.record).resolve()
     integrity_error = None
     try: verify_artifacts(record, state)
@@ -437,7 +471,11 @@ def review(args):
         snapshot_error = str(exc)
     finally: shutil.rmtree(checkdir, ignore_errors=True)
     if current is not None and current != state['expected_snapshot'] and args.result != 'blocked': raise ValueError('workspace changed since round ended')
-    if args.result != 'blocked' and not check_protected(state): raise ValueError('protected files changed')
+    protection_error = None
+    try:
+        if not check_protected(state): protection_error = 'protected files or index changed or baseline missing'
+    except (ValueError, OSError, subprocess.SubprocessError) as exc: protection_error = str(exc)
+    if args.result != 'blocked' and protection_error: raise ValueError(protection_error)
     baseline = record/'snapshots'/'baseline'
     manifest = json.loads((baseline/'manifest.json').read_text(encoding='utf-8'))
     missing = [name for name, item in manifest.items() if 'missing' not in item and not item.get('ignored_target') and not (Path(state['project'])/name).exists() and not (Path(state['project'])/name).is_symlink()]
@@ -449,6 +487,7 @@ def review(args):
         if current_index != baseline_index.read_bytes() and args.result != 'blocked' and not snapshot_error: raise ValueError('pre-existing staged changes differ from baseline; inspect before continuing')
     entry = {'baseline_reviewed': True, 'result': args.result, 'evidence': args.evidence, 'progress': args.progress, 'round': state['round']}
     if integrity_error: entry['integrity_error'] = integrity_error
+    if protection_error: entry['protection_error'] = protection_error
     if snapshot_error: entry['snapshot_error'] = snapshot_error
     write_json(Path(args.record).resolve()/'rounds'/('%03d' % state['round'])/'review.json', entry)
     entry.update(plan_version=state['plan_version'], model=state['model'])
@@ -504,7 +543,7 @@ def status(args):
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest='command', required=True)
-    p = sub.add_parser('prepare'); p.add_argument('--record', required=True); p.add_argument('--project', required=True); p.add_argument('--title', required=True); p.add_argument('--plan', required=True); p.add_argument('--tasks-file', required=True); p.add_argument('--criteria', required=True); p.add_argument('--authorization', required=True); p.add_argument('--verify', required=True); p.add_argument('--paths-file'); p.add_argument('--protect-paths-file'); auto = p.add_mutually_exclusive_group(); auto.add_argument('--auto-approve', dest='auto_approve', action='store_true', default=None); auto.add_argument('--no-auto-approve', dest='auto_approve', action='store_false')
+    p = sub.add_parser('prepare'); p.add_argument('--record', required=True); p.add_argument('--project', required=True); p.add_argument('--title', required=True); p.add_argument('--plan', required=True); p.add_argument('--tasks-file', required=True); p.add_argument('--criteria', required=True); p.add_argument('--authorization', required=True); p.add_argument('--verify', required=True); p.add_argument('--paths-file'); p.add_argument('--protect-paths-file'); p.add_argument('--accept-current-protected-index', action='store_true'); p.add_argument('--protection-evidence'); auto = p.add_mutually_exclusive_group(); auto.add_argument('--auto-approve', dest='auto_approve', action='store_true', default=None); auto.add_argument('--no-auto-approve', dest='auto_approve', action='store_false')
     p = sub.add_parser('run'); p.add_argument('--record', required=True); p.add_argument('--handoff', required=True); p.add_argument('--model'); p.add_argument('--cli', default='codefree-o'); p.add_argument('--auto', action='store_true'); recovery = p.add_mutually_exclusive_group(); recovery.add_argument('--rebuild', action='store_true'); recovery.add_argument('--retry', action='store_true'); p.add_argument('--recovery-evidence')
     p = sub.add_parser('record-review'); p.add_argument('--record', required=True); p.add_argument('--result', choices=['passed', 'failed', 'blocked'], required=True); p.add_argument('--evidence', required=True); p.add_argument('--progress', choices=['yes','no'], required=True); p.add_argument('--baseline-reviewed', action='store_true')
     p = sub.add_parser('unblock'); p.add_argument('--record', required=True); p.add_argument('--evidence', required=True)
