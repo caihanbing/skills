@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -204,6 +205,36 @@ def prepare(args):
         shutil.rmtree(stage, ignore_errors=True)
 
 
+def verify_artifacts(record, state, legacy_prepare=False):
+    number = state.get('plan_version')
+    if not isinstance(number, int) or number < 1:
+        raise ValueError('invalid plan version')
+    legacy = legacy_prepare and not state.get('tasks_sha256')
+    if not legacy and state.get('tasks_version') != number:
+        raise ValueError('plan and task versions differ')
+    checked = {}
+    items = [('plan-%03d.txt' % number, 'plan_sha256')]
+    if not legacy: items.append(('tasks-%03d.json' % number, 'tasks_sha256'))
+    for name, key in items:
+        path = record / 'plans' / name
+        try:
+            fd = os.open(str(path), os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0))
+            with os.fdopen(fd, 'rb') as stream:
+                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode): raise ValueError('artifact is not a regular file')
+                data = stream.read()
+        except OSError as exc:
+            raise ValueError('plan or tasks integrity check failed: ' + str(exc))
+        if not state.get(key) or hashlib.sha256(data).hexdigest() != state[key]:
+            raise ValueError('plan or tasks integrity check failed: ' + name)
+        checked[key] = data
+    return checked
+
+
+def verify_targets(state):
+    project = Path(state['project'])
+    for target in state.get('targets', []): safe_path(project, target)
+
+
 def prepare_existing(args):
     project = Path(args.project).resolve(strict=True)
     record = Path(args.record).resolve()
@@ -220,6 +251,9 @@ def prepare_existing(args):
     if state_path(args).exists():
         state = load(args); ensure_idle(state)
         if state.get('version') != 2: raise ValueError('legacy record is read-only')
+        verify_artifacts(record, state, legacy_prepare=True)
+        if not state.get('tasks_sha256'):
+            state.setdefault('migration_history', []).append({'plan_version': state['plan_version'], 'reason': 'legacy task digest absent; replaced from new tasks'})
         if state.get('phase') not in ('ready', 'needs_fix') and not (state.get('phase') == 'blocked' and state.get('last_review')): raise ValueError('task state does not allow plan changes')
         if state['project'] != str(project): raise ValueError('project mismatch')
         if state['title'] != args.title: raise ValueError('task title mismatch')
@@ -290,16 +324,9 @@ def run(args):
     if not state.get('auto_approve', True): raise ValueError('automatic approval disabled; dispatch unavailable')
     if not check_protected(state): raise ValueError('protected files changed')
     if state.get('phase') not in ('ready', 'needs_fix') and not (state.get('phase') == 'blocked' and state.get('last_review') and state.get('last_run', {}).get('issues') and (args.retry or args.rebuild) and args.recovery_evidence): raise ValueError('task state does not allow execution')
-    if state.get('tasks_version') != state.get('plan_version'): raise ValueError('prepare a task list before execution')
     record = Path(args.record).resolve()
-    number = state['plan_version']
-    checked_artifacts = {}
-    for name, key in (('plan-%03d.txt' % number, 'plan_sha256'), ('tasks-%03d.json' % number, 'tasks_sha256')):
-        path = record / 'plans' / name
-        data = path.read_bytes()
-        if not state.get(key) or hashlib.sha256(data).hexdigest() != state[key]:
-            raise ValueError('plan or tasks integrity check failed; prepare a new version')
-        checked_artifacts[key] = data
+    checked_artifacts = verify_artifacts(record, state)
+    verify_targets(state)
     if state['no_progress'] >= 3: raise ValueError('three rounds without progress; pause')
     if state.get('last_run', {}).get('issues'):
         if not args.recovery_evidence or not (args.rebuild or args.retry): raise ValueError('previous run failed; review and provide recovery evidence')
@@ -394,21 +421,35 @@ def review(args):
     if not state['round'] or state['last_review'] is not None: raise ValueError('no unreviewed round')
     if not args.baseline_reviewed: raise ValueError('review baseline preservation before recording review')
     record = Path(args.record).resolve()
+    integrity_error = None
+    try: verify_artifacts(record, state)
+    except ValueError as exc:
+        if args.result != 'blocked': raise
+        integrity_error = str(exc)
+    if args.result == 'passed': verify_targets(state)
     checkdir = record/'snapshots'/('review-check-%s' % time.time_ns())
-    try: current = state_snapshot(state, checkdir)
+    snapshot_error = None
+    try:
+        current = state_snapshot(state, checkdir)
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        if args.result == 'passed': raise
+        current = None
+        snapshot_error = str(exc)
     finally: shutil.rmtree(checkdir, ignore_errors=True)
-    if current != state['expected_snapshot'] and args.result != 'blocked': raise ValueError('workspace changed since round ended')
+    if current is not None and current != state['expected_snapshot'] and args.result != 'blocked': raise ValueError('workspace changed since round ended')
     if args.result != 'blocked' and not check_protected(state): raise ValueError('protected files changed')
     baseline = record/'snapshots'/'baseline'
     manifest = json.loads((baseline/'manifest.json').read_text(encoding='utf-8'))
     missing = [name for name, item in manifest.items() if 'missing' not in item and not item.get('ignored_target') and not (Path(state['project'])/name).exists() and not (Path(state['project'])/name).is_symlink()]
-    if missing and args.result != 'blocked': raise ValueError('baseline files removed: ' + ', '.join(missing))
+    if missing and args.result != 'blocked' and not snapshot_error: raise ValueError('baseline files removed: ' + ', '.join(missing))
     baseline_index = baseline/'index.diff'
     if baseline_index.exists() and baseline_index.stat().st_size:
         exclusions = ['--', '.', *(':(literal,exclude)' + name for name in state.get('baseline_protected', []))]
         current_index = git(Path(state['project']), 'diff', '--binary', '--cached', *exclusions).stdout
-        if current_index != baseline_index.read_bytes() and args.result != 'blocked': raise ValueError('pre-existing staged changes differ from baseline; inspect before continuing')
+        if current_index != baseline_index.read_bytes() and args.result != 'blocked' and not snapshot_error: raise ValueError('pre-existing staged changes differ from baseline; inspect before continuing')
     entry = {'baseline_reviewed': True, 'result': args.result, 'evidence': args.evidence, 'progress': args.progress, 'round': state['round']}
+    if integrity_error: entry['integrity_error'] = integrity_error
+    if snapshot_error: entry['snapshot_error'] = snapshot_error
     write_json(Path(args.record).resolve()/'rounds'/('%03d' % state['round'])/'review.json', entry)
     entry.update(plan_version=state['plan_version'], model=state['model'])
     state['last_review'] = entry
@@ -425,6 +466,7 @@ def unblock(args):
         raise ValueError('task cannot be unblocked')
     if state['no_progress'] >= 3: raise ValueError('three rounds without progress; pause')
     if not args.evidence.strip(): raise ValueError('unblock requires evidence')
+    verify_artifacts(Path(args.record).resolve(), state)
     record = Path(args.record).resolve()
     check = record / 'snapshots' / ('unblock-check-%s' % time.time_ns())
     try: current = state_snapshot(state, check)

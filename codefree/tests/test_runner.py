@@ -390,6 +390,65 @@ class ConstraintTests(RunnerFixture, unittest.TestCase):
         state=self.call('status','--record',self.record)
         self.assertTrue(any('snapshot failed:' in x for x in state['last_run']['issues']))
 
+    def test_tampered_artifacts_block_review_and_prepare(self):
+        for name in ('plan-001.txt', 'tasks-001.json'):
+            with self.subTest(name=name):
+                if self.record.exists():
+                    import shutil; shutil.rmtree(self.record)
+                self.prepare()
+                self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+                (self.record/'plans'/name).write_text('tampered')
+                self.call('record-review','--record',self.record,'--result','passed','--evidence','ok','--progress','yes','--baseline-reviewed',ok=False)
+                self.call('record-review','--record',self.record,'--result','blocked','--evidence','tampered','--progress','no','--baseline-reviewed')
+                self.call('unblock','--record',self.record,'--evidence','fixed',ok=False)
+                self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','c','--authorization','a','--verify','v',ok=False)
+
+    def test_incremental_target_symlink_rejected(self):
+        data=json.loads(self.tasks.read_text()); data['tasks'][0]['targets']=['future/new']; self.tasks.write_text(json.dumps(data))
+        self.prepare()
+        code='else:\n import os\n os.symlink('+repr(str(self.root))+','+repr(str(self.project/'future'))+')\n open('
+        original=self.fake.read_text(); self.fake.write_text(original.replace('else:\n open(',code))
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.call('record-review','--record',self.record,'--result','passed','--evidence','ok','--progress','yes','--baseline-reviewed',ok=False)
+        self.call('record-review','--record',self.record,'--result','failed','--evidence','bad target','--progress','yes','--baseline-reviewed')
+        self.fake.write_text(original)
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake,ok=False)
+        self.assertEqual(self.call('status','--record',self.record)['round'],1)
+
+    def test_legacy_without_tasks_digest_can_reprepare(self):
+        self.prepare()
+        path=self.record/'state.json'; state=json.loads(path.read_text()); del state['tasks_sha256']; path.write_text(json.dumps(state))
+        self.prepare()
+        state=self.call('status','--record',self.record)
+        self.assertEqual(state['plan_version'],2)
+        self.assertTrue(state['migration_history'])
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+
+    def test_symlink_plan_artifact_is_rejected(self):
+        self.prepare()
+        path=self.record/'plans'/'plan-001.txt'; path.unlink(); path.symlink_to(self.plan)
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake,ok=False)
+        self.assertFalse((self.root/'args').exists())
+
+    def test_fifo_plan_artifact_is_rejected_without_hanging(self):
+        self.prepare()
+        path=self.record/'plans'/'plan-001.txt'; path.unlink(); os.mkfifo(str(path))
+        result=subprocess.run([sys.executable,str(RUNNER),'run','--record',str(self.record),'--handoff',str(self.handoff),'--cli',str(self.fake)],capture_output=True,text=True,timeout=5)
+        self.assertNotEqual(result.returncode,0)
+        self.assertFalse((self.root/'args').exists())
+
+    def test_blocked_review_records_unsafe_target_snapshot(self):
+        import shutil
+        directory=self.project/'directory'; directory.mkdir(); (directory/'file').write_text('tracked')
+        subprocess.run(['git','-C',str(self.project),'add','directory/file'],check=True)
+        data=json.loads(self.tasks.read_text()); data['tasks'][0]['targets']=['directory/file']; self.tasks.write_text(json.dumps(data))
+        self.prepare()
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        shutil.rmtree(directory); directory.symlink_to(self.root, target_is_directory=True)
+        self.call('record-review','--record',self.record,'--result','blocked','--evidence','unsafe','--progress','no','--baseline-reviewed')
+        state=self.call('status','--record',self.record)
+        self.assertIn('snapshot_error',state['last_review'])
+
     def test_auto_is_default(self):
         self.prepare()
         self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)

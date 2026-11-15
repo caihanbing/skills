@@ -38,3 +38,5 @@ python3 "$runner" run --record "$record" --handoff "$feedback_file"
 进程中断后先通过 `status`、系统进程信息、日志和工作区确认原进程已结束且不会重复执行；PID 缺失时必须额外确认没有遗留进程。确认后使用 `status --record "$record" --reconcile --evidence "$reconciliation_evidence"` 保存中断快照；PID 缺失时还必须传 `--confirmed-no-process`，表明已独立确认没有遗留进程；审查该轮并记录结果。仅当确认原会话不可恢复且已保存证据时，使用 `run --record "$record" --handoff "$full_handoff" --rebuild --recovery-evidence "$reason"` 创建“任务名 · 恢复 N”会话；完整交接应包含计划、现状和历史结论。脚本不会自动判定会话不可恢复。
 
 运行失败后先调查证据，不自动重建；如果原因已解除且原会话可用，记录审查后使用 `run --record "$record" --handoff "$feedback_file" --retry --recovery-evidence "$reason"` 续接原会话。连续三轮无实质进展时暂停。工作区基线保护需要 Codex 人工核对；脚本不能独立判断同一文件内用户修改是否被覆盖。不要根据退出码或事件中的模型回复直接判定验收通过。
+
+运行器在每次派发、通过或失败审查、解除阻塞及更新已有计划前核验生效版本摘要；损坏时只允许记录 `blocked`，附带完整性错误，须恢复原件或另建任务。旧 v2 缺少任务摘要可通过重新 `prepare` 输入新清单迁移。每轮派发及通过审查前检查累计目标的符号链接，不能替代沙箱。授权文本仅供交接，不会自动解析；Codex 须确保文本和结构化开关一致。`run --auto` 为兼容参数，不能覆盖禁用设置。单轮运行没有自动超时。
