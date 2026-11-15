@@ -1,4 +1,5 @@
 import importlib.util
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -13,6 +14,28 @@ SPEC.loader.exec_module(DEV_WORK)
 
 
 class CrossSkillIntegrationTests(unittest.TestCase):
+    def test_snapshot_cli_agrees_across_both_skills(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+            (repo / "main.py").write_text("value = 1\n", encoding="utf-8")
+            scripts = (
+                ROOT / "manage-feature-docs/scripts/feature_docs.py",
+                ROOT / "manage-dev-work/scripts/dev_work.py",
+            )
+            def snapshots():
+                return [subprocess.run([sys.executable, str(script), "snapshot", "--repo", str(repo)],
+                                       check=True, capture_output=True, text=True).stdout.strip()
+                        for script in scripts]
+            first = snapshots()
+            self.assertEqual(first[0], first[1])
+            subprocess.run(["git", "-C", str(repo), "add", "main.py"], check=True)
+            self.assertEqual(first, snapshots())
+            (repo / "main.py").write_text("value = 2\n", encoding="utf-8")
+            second = snapshots()
+            self.assertEqual(second[0], second[1])
+            self.assertNotEqual(first[0], second[0])
+
     def test_dev_work_uses_sibling_canonical_feature_validator(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)

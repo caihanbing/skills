@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import html
+import importlib.util
 import os
 import re
 import subprocess
@@ -218,18 +220,19 @@ def implementation_worktree_digest(repo: Path) -> str | None:
 
 
 def verification_basis(repo: Path) -> str:
-    """Return the implementation snapshot used by verification gates."""
-    digest = implementation_worktree_digest(repo)
-    if digest is None:
-        return "no-git; worktree-digest=unknown"
-    head = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "--short=12", "HEAD"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    sha = head.stdout.strip() if head.returncode == 0 else "unborn"
-    return f"HEAD {sha}; worktree-digest sha256:{digest}"
+    """Return the canonical implementation snapshot."""
+    spec = importlib.util.spec_from_file_location("implementation_snapshot", Path(__file__).with_name("implementation_snapshot.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        return module.snapshot(repo)
+    except module.SnapshotError as exc:
+        probe = subprocess.run(["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
+        has_git_marker = any((parent / ".git").exists() or (parent / ".git").is_symlink() for parent in (repo, *repo.parents))
+        if (probe.returncode and not has_git_marker and not os.environ.get("GIT_DIR")
+                and "not a git repository" in probe.stderr.lower()):
+            return "no-git; worktree-digest=unknown"
+        raise DevWorkError(str(exc)) from exc
 
 
 def template_path() -> Path:
@@ -250,6 +253,8 @@ def next_work_id(repo: Path) -> str:
         match = WORK_ID_RE.fullmatch(item.work_id)
         if match and match.group(1) == today:
             highest = max(highest, int(match.group(2)))
+    if highest >= 999:
+        raise DevWorkError("daily work ID sequence exhausted")
     return f"WORK-{today}-{highest + 1:03d}"
 
 
@@ -257,6 +262,11 @@ def render_index(items: list[WorkItem], existing: str | None) -> str:
     lines = [INDEX_START, "| Work Item | 标题 | 类型 | 风险 | 状态 | Feature | 更新日期 |", "| --- | --- | --- | --- | --- | --- | --- |"]
     for item in sorted(items, key=lambda value: value.work_id):
         meta = item.metadata
+        if not WORK_ID_RE.fullmatch(item.work_id) or item.path.name != f"{item.work_id}.md":
+            raise DevWorkError(f"invalid work item in index: {item.path.name}")
+        def escape(value: str) -> str:
+            return html.escape(value.replace("\\", "\\\\").replace("|", "\\|"), quote=True).replace("\n", " ").replace("\r", " ")
+        meta = {key: escape(value) for key, value in meta.items()}
         lines.append(
             f"| [`{item.work_id}`]({item.path.name}) | {meta.get('work-title', '待确认')} | "
             f"{meta.get('work-type', '待确认')} | {meta.get('risk-level', '待确认')} | "
@@ -271,6 +281,8 @@ def render_index(items: list[WorkItem], existing: str | None) -> str:
     ends = existing.count(INDEX_END)
     if starts != ends or starts > 1:
         raise DevWorkError("work-item index has mismatched managed markers")
+    if starts == 1 and existing.index(INDEX_END) < existing.index(INDEX_START):
+        raise DevWorkError("work-item index has reversed managed markers")
     if starts == 1:
         start = existing.index(INDEX_START)
         end = existing.index(INDEX_END, start) + len(INDEX_END)
@@ -284,6 +296,22 @@ def sync_index(repo: Path) -> Path:
     existing = index.read_text(encoding="utf-8") if index.exists() else None
     atomic_write(index, render_index(discover_work_items(repo), existing))
     return index
+
+
+def write_item_and_index(repo: Path, item: WorkItem, text: str) -> None:
+    """Precompute the index and restore the item if writing the index fails."""
+    scan = mask_fenced_blocks(text)
+    updated = WorkItem(item.path, text, scan, parse_metadata(scan))
+    items = [updated if candidate.path == item.path else candidate for candidate in discover_work_items(repo)]
+    index = work_directory(repo) / "index.md"
+    existing = index.read_text(encoding="utf-8") if index.exists() else None
+    rendered = render_index(items, existing)
+    atomic_write(item.path, text)
+    try:
+        atomic_write(index, rendered)
+    except Exception:
+        atomic_write(item.path, item.text)
+        raise
 
 
 def work_index_errors(repo: Path) -> list[str]:
@@ -310,6 +338,10 @@ def init_work_item(
     actual_id = work_id or next_work_id(root)
     if not WORK_ID_RE.fullmatch(actual_id):
         raise DevWorkError("work ID must use WORK-YYYYMMDD-NNN")
+    try:
+        dt.datetime.strptime(actual_id[5:13], "%Y%m%d")
+    except ValueError as exc:
+        raise DevWorkError("work ID contains invalid date") from exc
     if work_type not in WORK_TYPES:
         raise DevWorkError(f"unsupported work type: {work_type}")
     if risk not in RISK_LEVELS:
@@ -319,6 +351,8 @@ def init_work_item(
         raise DevWorkError("feature IDs must be unique")
     if any(not FEATURE_ID_RE.fullmatch(value) for value in normalized_features):
         raise DevWorkError("feature IDs must use lowercase kebab-case")
+    if not title.strip():
+        raise DevWorkError("title cannot be empty")
     if any(value in title for value in ("\n", "\r", "-->", "|")):
         raise DevWorkError("title cannot contain newlines, '|', or '-->'")
     target = work_directory(root) / f"{actual_id}.md"
@@ -326,6 +360,9 @@ def init_work_item(
         raise DevWorkError(f"refusing to overwrite existing work item: {target}")
     source = template_path().read_text(encoding="utf-8")
     today = dt.date.today().isoformat()
+    basis = verification_basis(root)
+    if basis == "no-git; worktree-digest=unknown":
+        basis = "no-git; working-tree=unknown"
     replacements = {
         "{{WORK_TITLE}}": title,
         "{{WORK_ID}}": actual_id,
@@ -333,7 +370,7 @@ def init_work_item(
         "{{RISK_LEVEL}}": risk,
         "{{FEATURE_IDS}}": ", ".join(normalized_features),
         "{{TODAY}}": today,
-        "{{CODE_BASIS}}": git_code_basis(root),
+        "{{CODE_BASIS}}": basis,
     }
     rendered = source
     for placeholder, value in replacements.items():
@@ -341,7 +378,11 @@ def init_work_item(
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("x", encoding="utf-8") as output:
         output.write(rendered)
-    sync_index(root)
+    try:
+        sync_index(root)
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
     return target
 
 
@@ -376,9 +417,9 @@ def structural_errors(item: WorkItem) -> list[str]:
         if key not in item.metadata:
             errors.append(f"missing metadata: {key}")
     title_match = re.search(r"^#\s+.+?\s*$", item.scan_text, re.MULTILINE)
-    if title_match:
+    if title_match and any(re.fullmatch(r"#\s+\S.*?\s*", line) for line in item.scan_text.splitlines()):
         lines = item.scan_text.splitlines()
-        title_index = next(index for index, line in enumerate(lines) if re.fullmatch(r"#\s+.+?", line))
+        title_index = next(index for index, line in enumerate(lines) if re.fullmatch(r"#\s+\S.*?\s*", line))
         following = lines[title_index + 1 :]
         while following and not following[0].strip():
             following.pop(0)
@@ -397,6 +438,8 @@ def structural_errors(item: WorkItem) -> list[str]:
         if not value:
             continue
         try:
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+                raise ValueError("invalid date format")
             parsed = dt.date.fromisoformat(value)
             dates[key] = parsed
             if parsed > dt.date.today():
@@ -405,8 +448,20 @@ def structural_errors(item: WorkItem) -> list[str]:
             errors.append(f"{key} must use YYYY-MM-DD")
     if "created" in dates and "updated" in dates and dates["created"] > dates["updated"]:
         errors.append("created date cannot be later than updated date")
+    for heading in ("## 用户回归", "## 长期知识提炼", "## 发布与回滚", "## Bug Fix 闭环"):
+        fields = re.findall(r"^- \*\*(.+?)\*\*：", section(item.scan_text, heading), re.MULTILINE)
+        for field in set(fields):
+            if fields.count(field) > 1:
+                errors.append(f"duplicate field: {field}")
+    if not item.metadata.get("work-title", "").strip():
+        errors.append("work-title cannot be empty")
     if item.work_id and not WORK_ID_RE.fullmatch(item.work_id):
         errors.append("work-id must use WORK-YYYYMMDD-NNN")
+    if WORK_ID_RE.fullmatch(item.work_id):
+        try:
+            dt.datetime.strptime(item.work_id[5:13], "%Y%m%d")
+        except ValueError:
+            errors.append("work-id contains invalid date")
     if item.work_id and item.path.name != f"{item.work_id}.md":
         errors.append(f"filename does not match work-id {item.work_id!r}")
     first_heading = re.search(r"^#\s+(.+?)\s*$", item.scan_text, re.MULTILINE)
@@ -444,6 +499,10 @@ def structural_errors(item: WorkItem) -> list[str]:
         ("REV", REV_STATUSES, "## 代码审查"),
     ):
         for block in re.finditer(rf"^### {prefix}-\d+.*?(?=^### {prefix}-|\Z)", section(item.scan_text, heading), re.MULTILINE | re.DOTALL):
+            fields = re.findall(r"^- \*\*(.+?)\*\*：", block.group(0), re.MULTILINE)
+            for field in set(fields):
+                if fields.count(field) > 1:
+                    errors.append(f"duplicate field: {field}")
             status = field_value(block.group(0), "状态")
             if status not in allowed:
                 errors.append(f"unsupported {prefix} status: {status}")
@@ -541,8 +600,9 @@ def gate_errors(
                 errors.append(f"open risk lacks confirmation path: {match.group(0).splitlines()[0]}")
 
     if target in {"implementing", "verifying", "handoff-ready", "closed"}:
-        plan_items = re.findall(r"^- \[[ xX]\]\s+\S.*$", plan, re.MULTILINE)
-        if not plan_items or "- [ ]" in plan or "WORK_ITEM:REPLACE" in plan:
+        checkbox_lines = re.findall(r"^[ \t]*[-+*][ \t]+\[.*$", plan, re.MULTILINE)
+        if (not checkbox_lines or any(not re.fullmatch(r"[ \t]*[-+*][ \t]+\[[xX]\][ \t]+\S.*", line) for line in checkbox_lines)
+                or "WORK_ITEM:REPLACE" in plan):
             errors.append("implementation plan is incomplete")
 
     if target in {"verifying", "handoff-ready", "closed"}:
@@ -573,8 +633,8 @@ def gate_errors(
         }
         recorded_basis = item.metadata.get("verification-basis", "")
         current_basis = verification_basis(repo) if repo is not None else ""
-        if repo is not None and current_basis.startswith("HEAD "):
-            if not recorded_basis or recorded_basis == "pending":
+        if repo is not None and current_basis.startswith("impl-v2 "):
+            if not re.fullmatch(r"impl-v2 sha256:[0-9a-f]{64}", recorded_basis):
                 errors.append("verification basis is missing")
             elif recorded_basis != current_basis:
                 errors.append("verification basis does not match current implementation")
@@ -587,6 +647,8 @@ def gate_errors(
             if not linked or linked not in requirement_ids:
                 errors.append(f"verification references unknown requirement {linked}")
             status = field_value(match.group(0), "状态")
+            if status == "PASS" and current_basis.startswith("impl-v2 ") and field_value(match.group(0), "证据基线") != recorded_basis:
+                errors.append("PASS verification evidence basis does not match verification basis")
             if status in {"PASS", "FAIL", "SKIPPED"} and has_placeholder(field_value(match.group(0), "证据")):
                 errors.append(f"verification {match.group(0).splitlines()[0]} requires evidence for status {status}")
         for match in requirement_blocks:
@@ -633,6 +695,8 @@ def gate_errors(
         review_blocks = list(re.finditer(r"^### REV-(\d+).*?(?=^### REV-|\Z)", review, re.MULTILINE | re.DOTALL))
         for match in review_blocks:
             status = field_value(match.group(0), "状态")
+            if status == "PASS" and current_basis.startswith("impl-v2 ") and field_value(match.group(0), "证据基线") != recorded_basis:
+                errors.append("PASS review evidence basis does not match verification basis")
             if status in {"PASS", "FAIL"}:
                 for field in ("范围", "证据"):
                     if has_placeholder(field_value(match.group(0), field)):
@@ -695,6 +759,8 @@ def gate_errors(
 
 
 def find_work_item(repo: Path, work_id: str) -> WorkItem:
+    if not WORK_ID_RE.fullmatch(work_id):
+        raise DevWorkError("work ID must use WORK-YYYYMMDD-NNN")
     path = work_directory(repo) / f"{work_id}.md"
     if path.exists():
         return read_work_item(path)
@@ -702,6 +768,35 @@ def find_work_item(repo: Path, work_id: str) -> WorkItem:
     if len(matches) == 1:
         return matches[0]
     raise DevWorkError(f"work item not found: {work_id}")
+
+
+def invalidate_evidence(text: str) -> str:
+    def reset(match: re.Match) -> str:
+        block = match.group(0)
+        block = re.sub(r"(^- \*\*状态\*\*：\s*)PASS\s*$", r"\g<1>OPEN", block, flags=re.MULTILINE)
+        return re.sub(r"(^- \*\*证据基线\*\*：).*?$", r"\g<1>pending", block, flags=re.MULTILINE)
+    text = re.sub(r"^### (?:VER|REV)-\d+.*?(?=^### |^## |\Z)", reset, text, flags=re.MULTILINE | re.DOTALL)
+    return re.sub(r"(^- \*\*用户回归结果\*\*：\s*)passed\s*$", r"\g<1>pending", text, flags=re.MULTILINE)
+
+
+def migrate_work_item(repo: Path, work_id: str) -> None:
+    item = find_work_item(repo, work_id)
+    if item.metadata.get("work-status") != "implementing":
+        raise DevWorkError("migration requires implementing status")
+    text = item.text
+    if "verification-basis" not in item.metadata:
+        text = re.sub(r"(<!-- code-basis:.*?-->)[ \t]*$", r"\1\n<!-- verification-basis: pending -->", text, count=1, flags=re.MULTILINE)
+    def add_field(match: re.Match) -> str:
+        block = match.group(0)
+        if not re.search(r"^- \*\*证据基线\*\*：", block, re.MULTILINE):
+            block = block.rstrip() + "\n- **证据基线**：pending\n\n"
+        return block
+    text = re.sub(r"^### (?:VER|REV)-\d+.*?(?=^### |^## |\Z)", add_field, text, flags=re.MULTILINE | re.DOTALL)
+    if text != item.text or not item.metadata.get("verification-basis", "").startswith("impl-v2 sha256:"):
+        text = invalidate_evidence(text)
+        text = re.sub(r"(<!-- verification-basis:\s*).*?(\s*-->)", r"\g<1>pending\g<2>", text, count=1)
+    if text != item.text:
+        write_item_and_index(repo, item, text)
 
 
 def transition_work_item(
@@ -721,9 +816,13 @@ def transition_work_item(
     text = re.sub(r"(<!-- work-status:\s*)(.*?)(\s*-->)", rf"\g<1>{target}\g<3>", item.text, count=1)
     text = re.sub(r"(<!-- updated:\s*)(.*?)(\s*-->)", rf"\g<1>{dt.date.today().isoformat()}\g<3>", text, count=1)
     if target == "verifying":
-        text = re.sub(r"(<!-- verification-basis:\s*)(.*?)(\s*-->)", rf"\g<1>{verification_basis(root)}\g<3>", text, count=1)
-    atomic_write(item.path, text)
-    sync_index(root)
+        if "verification-basis" not in item.metadata:
+            return ["legacy work item requires migration before verification"]
+        new_basis = verification_basis(root)
+        if item.metadata.get("verification-basis") not in (None, "", "pending", new_basis):
+            text = invalidate_evidence(text)
+        text = re.sub(r"(<!-- verification-basis:\s*)(.*?)(\s*-->)", rf"\g<1>{new_basis}\g<3>", text, count=1)
+    write_item_and_index(root, item, text)
     return []
 
 
@@ -758,6 +857,13 @@ def parser() -> argparse.ArgumentParser:
     transition.add_argument("--id", required=True)
     transition.add_argument("--to", required=True, choices=sorted(STATUSES))
     transition.add_argument("--feature-validator", help="path to manage-feature-docs/scripts/feature_docs.py")
+    snap = sub.add_parser("snapshot")
+    snap.add_argument("--repo", required=True)
+    sync = sub.add_parser("sync-index")
+    sync.add_argument("--repo", required=True)
+    migrate = sub.add_parser("migrate")
+    migrate.add_argument("--repo", required=True)
+    migrate.add_argument("--id", required=True)
     close = sub.add_parser("close")
     close.add_argument("--repo", required=True)
     close.add_argument("--id", required=True)
@@ -773,6 +879,16 @@ def main() -> int:
             print(path)
             return 0
         root = ensure_repo(args.repo)
+        if args.command == "snapshot":
+            print(verification_basis(root))
+            return 0
+        if args.command == "sync-index":
+            print(sync_index(root))
+            return 0
+        if args.command == "migrate":
+            migrate_work_item(root, args.id)
+            print("OK")
+            return 0
         if args.command == "status":
             item = find_work_item(root, args.id)
             print(f"{item.work_id}\t{item.metadata.get('work-status')}\t{item.metadata.get('risk-level')}\t{item.metadata.get('work-title')}")

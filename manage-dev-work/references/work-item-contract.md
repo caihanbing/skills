@@ -8,7 +8,7 @@ Record IDs must be unique within a Work Item. `VER-*` references must resolve to
 
 At closeout, the canonical Feature Docs validator checks each associated document. Git repositories require `validate-contract --mode fresh`; non-Git repositories use `--mode structural` only.
 
-The generated metadata includes `verification-basis: pending`. Transitioning into `verifying` records the current implementation Git snapshot; handoff and closure reject a changed snapshot. Legacy Work Items may omit this field during structural validation, but Git-backed handoff and closure require it.
+The generated metadata includes `verification-basis: pending`. Transitioning into `verifying` records the `impl-v2` effective implementation snapshot; handoff and closure reject a changed snapshot. Every PASS `VER-*` and `REV-*` records `证据基线` equal to that basis after the check is actually performed. On a changed basis, old PASS and a passed user regression are invalidated and must be repeated. Legacy items remain structurally readable; migrate active items explicitly in `implementing` with `migrate --repo <repo> --id <work-id>`, then reverify. Never rewrite closed history merely to migrate it.
 
 Set impact values to `affected` or `none`; do not use `unknown` at the planning gate. For every affected dimension, document the implementation or mitigation in the relevant section. An `OPEN` decision or risk must include a concrete confirmation path before planning continues.
 

@@ -9,4 +9,5 @@
 | [`WORK-20260911-004`](WORK-20260911-004.md) | 同步研发流程 Skill 的 Fresh Closeout 契约说明 | change | low | closed | — | 2026-09-11 |
 | [`WORK-20261113-001`](WORK-20261113-001.md) | 完善 CodeFree 任务交接与等待 | bugfix | high | verifying | codefree | 2026-11-13 |
 | [`WORK-20261115-001`](WORK-20261115-001.md) | 接入研发专项技能路由 | change | medium | closed | manage-feature-docs, manage-dev-work | 2026-11-15 |
+| [`WORK-20261115-002`](WORK-20261115-002.md) | 修复双 Skill 快照和验证门禁 | change | high | closed | manage-feature-docs, manage-dev-work | 2026-11-15 |
 <!-- manage-dev-work:index:end -->

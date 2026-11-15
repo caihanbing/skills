@@ -28,6 +28,8 @@ For code, UI, or technical visualization work, read [specialist-routing.md](refe
 - Medium and high risk require a recorded passing code review before `handoff-ready`; high risk also requires a release and rollback strategy.
 - `handoff-ready` is not `closed`. If user regression is required, retain `handoff-ready` until its result is recorded as passed.
 - Entering `verifying` records an implementation `verification-basis`; `handoff-ready` and `closed` require the implementation worktree to match it.
+- In Git repositories, bind every PASS verification and review record's `证据基线` to the current `impl-v2` snapshot after the actual check. Changed implementation invalidates old PASS and passed user regression; repeat the checks before handoff. Snapshot matching does not prove a check was actually performed.
+- Legacy active work items must explicitly migrate in `implementing` with `migrate --repo <repo> --id <work-id>` and be reverified; do not migrate closed history.
 - When `feature-ids` is non-empty, closure requires each ID to resolve to `docs/features/<feature-id>.md` with matching metadata.
 - Closeout invokes the canonical Feature Docs contract for every associated ID; in a Git repository it uses fresh validation against the current implementation snapshot, while a non-Git repository uses structural validation only.
 - Pass `--feature-validator <path-to-feature_docs.py>` to `transition` or `close` when the default sibling validator is not available; the command must support `validate-contract`.
@@ -41,6 +43,9 @@ python3 <skill-directory>/scripts/dev_work.py status --repo <repo> --id <work-id
 python3 <skill-directory>/scripts/dev_work.py validate --repo <repo> --id <work-id> [--gate <state>]
 python3 <skill-directory>/scripts/dev_work.py transition --repo <repo> --id <work-id> --to <state>
 python3 <skill-directory>/scripts/dev_work.py close --repo <repo> --id <work-id>
+python3 <skill-directory>/scripts/dev_work.py snapshot --repo <repo>
+python3 <skill-directory>/scripts/dev_work.py migrate --repo <repo> --id <work-id>
+python3 <skill-directory>/scripts/dev_work.py sync-index --repo <repo>
 ```
 
 Run `validate` before and after a transition. Report the current state, failed gates, evidence, release handoff, and Feature Docs updated.

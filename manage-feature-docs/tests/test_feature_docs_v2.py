@@ -216,7 +216,7 @@ class FeatureDocsV2Tests(unittest.TestCase):
             errors = FEATURE_DOCS.fresh_git_errors(document, repo)
             self.assertTrue(any("12" in error or "digest" in error for error in errors), errors)
 
-    def test_fresh_mode_accepts_legacy_twelve_char_basis(self):
+    def test_fresh_mode_rejects_legacy_twelve_char_basis(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
             subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, text=True)
@@ -231,7 +231,7 @@ class FeatureDocsV2Tests(unittest.TestCase):
             path.parent.mkdir(parents=True)
             path.write_text(complete_document(f"HEAD {head[:12]}; working-tree=clean"), encoding="utf-8")
             errors = FEATURE_DOCS.fresh_git_errors(FEATURE_DOCS.read_document(path), repo)
-            self.assertEqual([], errors)
+            self.assertTrue(any("legacy" in error for error in errors), errors)
 
     def test_fresh_mode_rejects_legacy_dirty_management_documents(self):
         with tempfile.TemporaryDirectory() as directory:

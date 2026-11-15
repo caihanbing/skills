@@ -184,6 +184,11 @@ class DevWorkTests(unittest.TestCase):
     def _to_handoff(self, repo, work_id):
         for target in ("clarified", "planned", "implementing", "verifying"):
             self.assertEqual([], DEV_WORK.transition_work_item(repo, work_id, target))
+        path = DEV_WORK.find_work_item(repo, work_id).path
+        text = path.read_text()
+        basis = DEV_WORK.read_work_item(path).metadata.get("verification-basis", "")
+        if basis.startswith("impl-v2 "):
+            path.write_text(text.replace("**证据基线**：pending", f"**证据基线**：{basis}"))
         return DEV_WORK.transition_work_item(repo, work_id, "handoff-ready")
 
     def test_rejects_duplicate_record_ids(self):
@@ -280,7 +285,7 @@ class DevWorkTests(unittest.TestCase):
             follow_up = repo / "docs" / "work-items" / "WORK-20260907-001.md"
             follow_up.write_text("placeholder", encoding="utf-8")
             path.write_text(text, encoding="utf-8")
-            errors = self._to_handoff(repo, "WORK-20260906-001")
+            errors = DEV_WORK.gate_errors(DEV_WORK.read_work_item(path), "handoff-ready", repo)
             self.assertTrue(any("decision DEC-001" in error and "resolved" in error for error in errors), errors)
 
     def test_rejects_close_with_missing_feature_doc(self):
@@ -489,7 +494,7 @@ class DevWorkTests(unittest.TestCase):
             follow_up = repo / "docs" / "work-items" / "WORK-20260907-001.md"
             follow_up.write_text("not a work item", encoding="utf-8")
             path.write_text(text, encoding="utf-8")
-            errors = self._to_handoff(repo, "WORK-20260906-001")
+            errors = DEV_WORK.gate_errors(DEV_WORK.read_work_item(path), "handoff-ready", repo)
             self.assertTrue(any("follow-up work" in error and "valid" in error for error in errors), errors)
 
     def test_work_item_requires_h1_title_and_matching_filename(self):
@@ -734,3 +739,157 @@ class DevWorkTests(unittest.TestCase):
             path.write_text(text, encoding="utf-8")
             errors = DEV_WORK.validate_work_item(repo, "WORK-20260906-001")
             self.assertEqual([], errors)
+
+class NewContractTests(unittest.TestCase):
+    def test_empty_title_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(DEV_WORK.DevWorkError):
+                DEV_WORK.init_work_item(directory, None, '  ', 'feature', 'low', ())
+
+    def test_reversed_index_markers_are_reported(self):
+        with self.assertRaises(DEV_WORK.DevWorkError):
+            DEV_WORK.render_index([], DEV_WORK.INDEX_END + '\n' + DEV_WORK.INDEX_START)
+
+    def test_missing_h1_does_not_crash(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = DEV_WORK.init_work_item(directory, None, 'title', 'feature', 'low', ())
+            path.write_text(path.read_text().replace('# title', '# '))
+            self.assertTrue(DEV_WORK.structural_errors(DEV_WORK.read_work_item(path)))
+
+    def test_changed_snapshot_invalidates_old_pass_and_regression(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+            implementation = repo / 'app.py'
+            implementation.write_text('one')
+            path = DEV_WORK.init_work_item(repo, None, 'title', 'feature', 'low', ())
+            helper = DevWorkTests()
+            helper._complete_low_risk_item(path)
+            work_id = DEV_WORK.read_work_item(path).work_id
+            for state in ('clarified', 'planned', 'implementing', 'verifying'):
+                self.assertEqual([], DEV_WORK.transition_work_item(repo, work_id, state))
+            basis = DEV_WORK.read_work_item(path).metadata['verification-basis']
+            text = path.read_text().replace('**证据基线**：pending', f'**证据基线**：{basis}').replace('**用户回归结果**：not-required', '**用户回归结果**：passed')
+            path.write_text(text)
+            self.assertEqual([], DEV_WORK.transition_work_item(repo, work_id, 'implementing'))
+            implementation.write_text('two')
+            self.assertEqual([], DEV_WORK.transition_work_item(repo, work_id, 'verifying'))
+            text = path.read_text()
+            self.assertNotIn('**状态**：PASS', text)
+            self.assertIn('**用户回归结果**：pending', text)
+            self.assertNotEqual(basis, DEV_WORK.read_work_item(path).metadata['verification-basis'])
+
+    def test_migrate_legacy_implementing_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            path = DEV_WORK.init_work_item(repo, None, 'title', 'feature', 'low', ())
+            text = path.read_text().replace('work-status: intake', 'work-status: implementing')
+            text = re.sub(r'^<!-- verification-basis:.*\n', '', text, flags=re.MULTILINE)
+            text = re.sub(r'^- \*\*证据基线\*\*：.*\n', '', text, flags=re.MULTILINE)
+            path.write_text(text.replace('**状态**：OPEN\n- **证据**', '**状态**：PASS\n- **证据**'))
+            work_id = DEV_WORK.read_work_item(path).work_id
+            DEV_WORK.migrate_work_item(repo, work_id)
+            migrated = path.read_text()
+            DEV_WORK.migrate_work_item(repo, work_id)
+            self.assertEqual(migrated, path.read_text())
+            self.assertIn('verification-basis: pending', migrated)
+            self.assertEqual(2, migrated.count('**证据基线**：pending'))
+
+    def test_broken_git_repository_fails_closed(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+            (repo / '.git' / 'HEAD').unlink()
+            with self.assertRaises(DEV_WORK.DevWorkError):
+                DEV_WORK.verification_basis(repo)
+
+    def test_nested_unchecked_plan_item_blocks_implementation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            path = DEV_WORK.init_work_item(repo, None, 'title', 'feature', 'low', ())
+            DevWorkTests()._complete_low_risk_item(path)
+            text = path.read_text().replace('- [x] 已完成', '- [x] 已完成\n  - [ ] critical')
+            path.write_text(text)
+            errors = DEV_WORK.gate_errors(DEV_WORK.read_work_item(path), 'implementing')
+            self.assertTrue(any('plan is incomplete' in error for error in errors), errors)
+
+    def test_invalid_nested_checkbox_blocks_implementation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            path = DEV_WORK.init_work_item(repo, None, 'title', 'feature', 'low', ())
+            DevWorkTests()._complete_low_risk_item(path)
+            path.write_text(path.read_text().replace('- [x] 已完成', '- [x] 已完成\n  - [maybe] critical'))
+            errors = DEV_WORK.gate_errors(DEV_WORK.read_work_item(path), 'implementing')
+            self.assertTrue(any('plan is incomplete' in error for error in errors), errors)
+
+    def test_init_records_canonical_git_code_basis(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+            (repo / 'app.py').write_text('implementation')
+            path = DEV_WORK.init_work_item(repo, None, 'title', 'feature', 'low', ())
+            self.assertEqual(DEV_WORK.verification_basis(repo), DEV_WORK.read_work_item(path).metadata['code-basis'])
+
+    def test_index_escapes_valid_title(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            DEV_WORK.init_work_item(repo, None, r'path\name <tag>', 'feature', 'low', ())
+            index = (repo / 'docs/work-items/index.md').read_text()
+            self.assertIn(r'path\\name &lt;tag&gt;', index)
+
+    def test_index_rejects_invalid_item_instead_of_skipping(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            path = DEV_WORK.init_work_item(repo, None, 'title', 'feature', 'low', ())
+            path.write_text(path.read_text().replace('work-id: WORK-', 'work-id: INVALID-'))
+            with self.assertRaises(DEV_WORK.DevWorkError):
+                DEV_WORK.sync_index(repo)
+
+    def test_init_rolls_back_if_index_markers_reversed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            directory_path = repo / 'docs/work-items'
+            directory_path.mkdir(parents=True)
+            index = directory_path / 'index.md'
+            original = DEV_WORK.INDEX_END + '\n' + DEV_WORK.INDEX_START
+            index.write_text(original)
+            with self.assertRaises(DEV_WORK.DevWorkError):
+                DEV_WORK.init_work_item(repo, 'WORK-20260906-001', 'title', 'feature', 'low', ())
+            self.assertFalse((directory_path / 'WORK-20260906-001.md').exists())
+            self.assertEqual(original, index.read_text())
+
+    def test_transition_rolls_back_when_index_write_fails(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            path = DEV_WORK.init_work_item(repo, None, 'title', 'feature', 'low', ())
+            original = path.read_text()
+            original_write = DEV_WORK.atomic_write
+            def fail_index(target, text):
+                if target.name == 'index.md':
+                    raise OSError('simulated index failure')
+                return original_write(target, text)
+            with patch.object(DEV_WORK, 'atomic_write', side_effect=fail_index):
+                with self.assertRaises(OSError):
+                    DEV_WORK.transition_work_item(repo, DEV_WORK.read_work_item(path).work_id, 'clarified')
+            self.assertEqual(original, path.read_text())
+
+    def test_migrate_rolls_back_when_index_write_fails(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            path = DEV_WORK.init_work_item(repo, None, 'title', 'feature', 'low', ())
+            path.write_text(path.read_text().replace('work-status: intake', 'work-status: implementing').replace('<!-- verification-basis: pending -->\n', ''))
+            original = path.read_text()
+            original_write = DEV_WORK.atomic_write
+            def fail_index(target, text):
+                if target.name == 'index.md':
+                    raise OSError('simulated index failure')
+                return original_write(target, text)
+            with patch.object(DEV_WORK, 'atomic_write', side_effect=fail_index):
+                with self.assertRaises(OSError):
+                    DEV_WORK.migrate_work_item(repo, DEV_WORK.read_work_item(path).work_id)
+            self.assertEqual(original, path.read_text())

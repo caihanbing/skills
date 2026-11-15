@@ -13,12 +13,12 @@ Place the following contiguous metadata block immediately after the title:
 <!-- feature-status: active -->
 <!-- feature-summary: 在受控条件下取消订单。 -->
 <!-- last-verified: 2026-09-06 -->
-<!-- code-basis: HEAD abc123def456; worktree-digest sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef -->
+<!-- code-basis: impl-v2 sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef -->
 ```
 
 Use `planned`, `active`, `deprecated`, or `retired`. Keep `docs/features/index.md` aligned with this metadata; use `sync-index` for batch edits.
 
-Fresh validation records the new `HEAD <12-hex-sha>; worktree-digest sha256:<64-hex>` form. Structural validation continues to read legacy `HEAD <12-hex-sha>; working-tree=<clean|dirty>` metadata, but fresh validation rejects legacy `dirty` evidence because it cannot establish a unique implementation snapshot; regenerate the digest basis before handoff.
+Fresh validation requires `impl-v2 sha256:<64-hex>`, computed by `snapshot --repo <root>`. It captures effective implementation paths, content, type and executable mode while excluding management documents; staging or committing unchanged content does not invalidate it. Structural validation continues to read legacy HEAD formats, but fresh validation requires explicit review and replacement with v2. Preserve HEAD and dirty-state provenance separately in prose. Snapshot errors and dirty or unverifiable submodules fail closed.
 
 For a workspace without Git, `no-git; working-tree=unknown` is valid structural metadata. Fresh validation cannot establish an implementation snapshot and therefore fails.
 

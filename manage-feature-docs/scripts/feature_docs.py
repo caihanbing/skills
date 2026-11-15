@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import unquote
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from implementation_snapshot import snapshot, SnapshotError
+
 
 FEATURE_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 METADATA_RE = re.compile(
@@ -72,6 +75,7 @@ STRUCTURED_SECTION_FIELDS = {
     "## 已知问题与后续工作": ("影响", "当前处理", "后续动作"),
 }
 CHANGE_STATUSES = {"已完成", "部分完成", "已回滚"}
+V2_CODE_BASIS_RE = re.compile(r"impl-v2 sha256:[0-9a-f]{64}$")
 CODE_BASIS_RE = re.compile(r"HEAD\s+(?:[0-9a-fA-F]{12}|unborn);\s*worktree-digest\s+sha256:[0-9a-fA-F]{64}$")
 LEGACY_CODE_BASIS_RE = re.compile(r"HEAD\s+(?:[0-9a-fA-F]{12}|unborn);\s*working-tree=(?:clean|dirty)$")
 NO_GIT_CODE_BASIS_RE = re.compile(r"no-git;\s*working-tree=unknown$")
@@ -199,88 +203,26 @@ def reject_unsafe_metadata(label: str, value: str) -> None:
 
 
 def git_code_basis(repo: Path) -> str:
-    def run_git(*args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["git", "-C", str(repo), *args],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-
-    inside = run_git("rev-parse", "--is-inside-work-tree")
-    if inside.returncode != 0 or inside.stdout.strip() != "true":
-        return "no-git; working-tree=unknown"
-    head = run_git("rev-parse", "--short=12", "HEAD")
-    sha = head.stdout.strip() if head.returncode == 0 else "unborn"
-    digest = implementation_worktree_digest(repo)
-    return f"HEAD {sha}; worktree-digest sha256:{digest}"
-
-
-def implementation_worktree_digest(repo: Path) -> str | None:
-    """Hash changed implementation files, excluding management documents."""
-    status = subprocess.run(
-        ["git", "-C", str(repo), "status", "--porcelain", "-z", "--untracked-files=all"],
-        capture_output=True,
-        check=False,
-    )
-    entries: list[bytes] = []
-    records = status.stdout.split(b"\0")
-    index = 0
-    while index < len(records):
-        record = records[index]
-        index += 1
-        if len(record) < 4:
-            continue
-        state, raw_path = record[:2], record[3:]
-        paths = [raw_path]
-        if b"R" in state or b"C" in state:
-            if index < len(records):
-                paths.append(records[index])
-                index += 1
-        for path_bytes in paths:
-            path = path_bytes.decode("utf-8", "surrogateescape")
-            if path.startswith(MANAGEMENT_DOC_PREFIXES):
-                continue
-            absolute = repo / path
-            try:
-                content = absolute.read_bytes() if absolute.exists() else b""
-            except OSError:
-                content = b""
-            entries.append(state + b"\0" + path_bytes + b"\0" + hashlib.sha256(content).digest())
-    digest = hashlib.sha256()
-    for entry in sorted(entries):
-        digest.update(entry)
-        digest.update(b"\n")
-    return digest.hexdigest()
+    inside = subprocess.run(["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"], capture_output=True, text=True)
+    if inside.returncode != 0:
+        markers = (repo, *repo.parents)
+        has_marker = any(os.path.lexists(path / ".git") for path in markers)
+        if ("not a git repository" in inside.stderr.lower()
+                and not has_marker and "GIT_DIR" not in os.environ):
+            return "no-git; working-tree=unknown"
+        raise SnapshotError("git rev-parse failed: " + inside.stderr.strip())
+    return snapshot(repo)
 
 
 def fresh_git_errors(document: FeatureDocument, repo: Path) -> list[str]:
-    """Compare document evidence with the current implementation worktree."""
-    def git(*args: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(["git", "-C", str(repo), *args], check=False, capture_output=True, text=True)
-
-    if git("rev-parse", "--is-inside-work-tree").stdout.strip() != "true":
-        return ["fresh validation requires a Git repository"]
     basis = document.metadata.get("code-basis", "")
-    match = re.fullmatch(r"HEAD\s+([0-9a-fA-F]{12}|unborn);\s*worktree-digest\s+sha256:([0-9a-fA-F]{64})", basis)
-    legacy = re.fullmatch(r"HEAD\s+([0-9a-fA-F]{12}|unborn);\s*working-tree=(clean|dirty)", basis)
-    if not match and not legacy:
-        return ["code-basis must use 'HEAD <12-hex-sha>; worktree-digest sha256:<64-hex>' or legacy 12-hex working-tree format"]
-    actual_head = git("rev-parse", "--short=12", "HEAD").stdout.strip() or "unborn"
-    errors: list[str] = []
-    recorded_head = match.group(1) if match else legacy.group(1)
-    if actual_head != recorded_head:
-        errors.append("code-basis HEAD does not match current HEAD")
-    actual_digest = implementation_worktree_digest(repo)
-    if actual_digest is None:
-        errors.append("code-basis worktree digest cannot be computed")
-    elif match and actual_digest != match.group(2):
-        errors.append("code-basis worktree digest does not match implementation changes")
-    elif legacy and legacy.group(2) == "clean" and actual_digest != hashlib.sha256().hexdigest():
-        errors.append("code-basis working-tree state does not match implementation changes")
-    elif legacy and legacy.group(2) == "dirty":
-        errors.append("legacy dirty code-basis cannot establish freshness; regenerate digest basis")
-    return errors
+    if not V2_CODE_BASIS_RE.fullmatch(basis):
+        return ["legacy dirty or legacy code-basis cannot establish freshness; regenerate impl-v2 snapshot digest"]
+    try:
+        actual = snapshot(repo)
+    except SnapshotError as exc:
+        return [f"cannot compute implementation snapshot: {exc}"]
+    return [] if basis == actual else ["code-basis worktree digest implementation snapshot does not match"]
 
 
 def validate_contract_document(document: FeatureDocument, repo: Path) -> list[str]:
@@ -511,7 +453,7 @@ def validate_document(document: FeatureDocument, repo: Path) -> list[str]:
         except ValueError:
             errors.append("last-verified must use YYYY-MM-DD")
     code_basis = metadata.get("code-basis", "")
-    if code_basis and not (CODE_BASIS_RE.fullmatch(code_basis) or LEGACY_CODE_BASIS_RE.fullmatch(code_basis) or NO_GIT_CODE_BASIS_RE.fullmatch(code_basis)):
+    if code_basis and not (V2_CODE_BASIS_RE.fullmatch(code_basis) or CODE_BASIS_RE.fullmatch(code_basis) or LEGACY_CODE_BASIS_RE.fullmatch(code_basis) or NO_GIT_CODE_BASIS_RE.fullmatch(code_basis)):
         errors.append("code-basis has unsupported syntax")
     for key, value in metadata.items():
         if "|" in value or "\n" in value or "\r" in value:
@@ -814,6 +756,9 @@ def build_parser() -> argparse.ArgumentParser:
     sync_parser = subparsers.add_parser("sync-index", help="rebuild the managed feature index")
     sync_parser.add_argument("--repo", required=True, help="repository or workspace root")
     sync_parser.set_defaults(handler=command_sync_index)
+    snapshot_parser = subparsers.add_parser("snapshot", help="print implementation snapshot")
+    snapshot_parser.add_argument("--repo", required=True)
+    snapshot_parser.set_defaults(handler=lambda args: print(snapshot(ensure_repo(args.repo))) or 0)
     return parser
 
 
@@ -822,7 +767,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         return args.handler(args)
-    except (FeatureDocsError, OSError) as exc:
+    except (FeatureDocsError, SnapshotError, OSError) as exc:
         print(f"ERROR\t{exc}", file=sys.stderr)
         return 2
 

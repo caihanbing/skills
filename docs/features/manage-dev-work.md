@@ -6,7 +6,7 @@
 <!-- feature-status: active -->
 <!-- feature-summary: 面向仓库本地研发工作的 Work Item 生命周期、质量门禁与 Feature Docs Closeout。 -->
 <!-- last-verified: 2026-11-15 -->
-<!-- code-basis: HEAD 5c9344930879; worktree-digest sha256:731a57515abd180fc11d3f0004c62f6e71f4b7dd395917aa5421ec5cfafa7e45 -->
+<!-- code-basis: impl-v2 sha256:9d5857e16ccd331acd0d27c9a65e2fe278e398255e6e1eec0f70e288bbf3c347 -->
 
 ## 快速上下文
 
@@ -28,7 +28,7 @@
 - 创建、查询、结构校验、阶段迁移和关闭 `docs/work-items` 下的 Work Item。
 - 管理 `intake`、`clarified`、`planned`、`implementing`、`verifying`、`handoff-ready`、`closed` 及异常状态的迁移关系。
 - 校验 `REQ-*`、`DEC-*`、`RSK-*`、`VER-*`、`REV-*` 记录、变更影响 14 个维度、风险等级和用户回归交接字段。
-- 在 `verifying` 保存 `verification-basis`，在交付/关闭前检查实现工作区指纹和 Git HEAD。
+- 在 `verifying` 保存 `verification-basis`，在交付/关闭前检查有效实现内容与 v2 验证基线。
 - 对关联 Feature Doc 调用 sibling 或 `--feature-validator` 指定的 canonical validator；Git 仓库使用 fresh，非 Git 工作区使用 structural 校验。
 - 自动创建和同步 Work Item 索引，并屏蔽 fenced Markdown 中的伪元数据、标题和记录。
 
@@ -67,7 +67,7 @@
 - `manage-dev-work/scripts/dev_work.py: render_index`、`sync_index`、`work_index_errors` — 生成受标记包围的索引区块，校验目录与 Work Item 元数据是否一致。
 - `manage-dev-work/scripts/dev_work.py: read_work_item`、`mask_fenced_blocks`、`structural_errors` — 读取文档、屏蔽 fenced Markdown，并执行元数据、标题、日期、记录 ID、类型和状态结构校验。
 - `manage-dev-work/scripts/dev_work.py: gate_errors` — 按目标状态实施澄清、计划、实现、验证、交付和关闭门禁，并检查需求/验证/决策/风险之间的引用关系。
-- `manage-dev-work/scripts/dev_work.py: implementation_worktree_digest`、`verification_basis` — 用 Git 状态、路径和文件内容摘要计算实现工作区指纹，并生成验证基线。
+- `manage-dev-work/scripts/implementation_snapshot.py`、`dev_work.py: verification_basis` — 对有效实现路径、文件类型、模式和内容计算 v2 验证基线。
 - `manage-dev-work/scripts/dev_work.py: canonical_feature_validation_errors` — 默认调用 `../manage-feature-docs/scripts/feature_docs.py validate-contract`；Git 使用 `fresh`，非 Git 使用 `structural`，也支持命令行覆盖 validator 路径。
 - `manage-dev-work/scripts/dev_work.py: transition_work_item`、`validate_work_item`、`main` — 执行状态迁移、结构/门禁校验、字段更新和 CLI 输出；校验失败时不改变状态。
 - `manage-dev-work/assets/work-item-template.md` — 初始化模板和固定记录形状；`references/workflow.md`、`work-item-contract.md`、`verification-policy.md`、`release-handoff.md` — 补充流程与证据契约。
@@ -107,8 +107,8 @@
 - **WorkItem 内存模型**：`WorkItem` 包含 `path`、原始 `text`、用于解析的 `scan_text` 和元数据字典；`read_work_item` 从 UTF-8 Markdown 构造该模型。
 - **持久化模型**：一个 Work Item 对应一个 `WORK-*.md` 文件；元数据保存生命周期、类型、风险、Feature 关联和日期，正文保存固定章节与 `REQ/DEC/RSK/VER/REV` 记录。
 - **索引模型**：`docs/work-items/index.md` 的 `manage-dev-work:index:start/end` 区块按 Work Item ID 排序生成；索引不是独立事实源，`sync_index` 可由文件重新构建。
-- **状态与证据**：状态集合包含正常生命周期和 `blocked`、`cancelled`、`rolled-back` 异常状态；`verification-basis` 使用 `HEAD <12-hex-sha>; worktree-digest sha256:<64-hex>` 表示实现快照。
-- **数据库与迁移**：不涉及数据库、表、索引、ORM 或数据迁移；兼容性通过 Markdown 结构校验和 legacy `verification-basis` 读取处理，不提供自动 schema migration。
+- **状态与证据**：状态集合包含正常生命周期和 `blocked`、`cancelled`、`rolled-back` 异常状态；`verification-basis` 使用 `impl-v2 sha256:<64-hex>` 表示实现快照；PASS 验证与审查记录需绑定相同的 `证据基线`。
+- **数据库与迁移**：不涉及数据库、表、索引、ORM 或数据迁移；旧档案保留结构读取；活动项在 `implementing` 阶段使用 `migrate` 显式升级，重新核验后交付。
 - **关联数据**：`feature-ids` 只保存稳定 Feature ID，不复制 Feature Doc 正文；关闭时按 ID 解析 `docs/features/<feature-id>.md` 并调用 canonical validator。
 
 ## 核心流程
@@ -117,7 +117,7 @@
 2. `intake → clarified` 只允许在结构有效且没有 `BLOCKER` 决策时迁移；`blocked` 只能恢复到 `clarified` 或取消，异常路径不会自动绕过澄清。
 3. `clarified → planned` 检查需求与验收标准、14 个影响维度、风险最低等级，以及开放决策/风险的确认路径。
 4. `planned → implementing` 检查实施计划至少有一项且不存在未勾选项；`implementing` 允许在补充实现或处理失败验证后继续。
-5. `implementing → verifying` 检查计划已完成或显式延期、需求已有实现证据，然后用 `verification_basis` 写入当前 Git HEAD 与实现工作区摘要。
+5. `implementing → verifying` 检查计划已完成或显式延期、需求已有实现证据，然后用 `verification_basis` 写入当前有效实现的 v2 摘要；实现内容变化时失效旧 PASS 和已通过的用户回归。
 6. `verifying → handoff-ready` 检查基线仍匹配，所有需求有验证证据，验证记录全部 `PASS`，中高风险最新审查通过，风险已处理，用户回归交接字段完整；高风险还检查发布/回滚策略。
 7. `handoff-ready → closed` 检查用户回归结果（需要回归时必须是 `passed`，不需要时必须是 `not-required`）、Feature Docs 证据及每个关联文档的 canonical 校验；成功后更新状态、更新时间并同步索引。
 8. 每次成功迁移都更新 `work-status` 和 `updated`；仅进入 `verifying` 时写入 `verification-basis`。任一门禁失败都返回错误，不更新 Work Item 状态。
@@ -129,7 +129,7 @@
 - **状态迁移跳跃或异常状态路径非法 — 当前行为**：`transition_work_item` 返回 `invalid transition`；**恢复或风险**：按允许的相邻状态推进，失败验证/审查需回到 `implementing`。
 - **元数据、固定章节、记录 ID、日期或索引结构不合约 — 当前行为**：结构校验报告缺失、重复、非法日期、标题/文件名不一致或索引过期；**恢复或风险**：修复对应 Markdown 后重新运行 `validate`，日期解析错误不会继续写入错误状态。
 - **规划证据不足 — 当前行为**：缺少需求、验收、完整影响值、风险等级或开放决策/风险确认路径时阻断 `planned`；**恢复或风险**：补齐可核验事实，否则工作保持当前状态。
-- **验证快照过期 — 当前行为**：实现文件、未跟踪嵌套文件、非管理 Markdown、非 ASCII 文件、重命名或 HEAD 改变会使 `verification-basis` 不匹配，阻断交付/关闭；**恢复或风险**：回到 `implementing` 完成变更后重新进入 `verifying`。
+- **验证快照过期 — 当前行为**：实现文件、未跟踪嵌套文件、非管理 Markdown、非 ASCII 文件或重命名会使 `verification-basis` 不匹配，阻断交付/关闭；**恢复或风险**：回到 `implementing` 完成变更后重新进入 `verifying`。
 - **Feature Doc 缺失、ID 顺序不一致或 canonical 合约失败 — 当前行为**：交付阶段可暂不阻断，关闭阶段阻断并返回对应 Feature Doc 错误；**恢复或风险**：补齐稳定 Feature Doc、关闭证据并使用同一实现快照重新验证。
 - **中高风险或 bugfix 证据不足 — 当前行为**：缺少通过审查、发布/回滚策略、风险处理、bugfix 闭环或真实回归结果时不能关闭；**恢复或风险**：补齐证据，避免把实现完成误当成验证完成。
 - **关闭、取消或回滚 — 当前行为**：`closed`、`cancelled` 为终态，`rolled-back` 只能回到 `implementing` 或取消；**恢复或风险**：终态记录不可由该 CLI 再次迁移，需新建 Work Item 记录后续工作。
@@ -138,7 +138,7 @@
 
 - `init` 使用独占创建并拒绝既有目标文件；Work Item ID、Feature ID、记录 ID 和影响维度的唯一性检查提供基本的重复提交保护。
 - 状态更新与索引重写通过临时文件加 `os.replace` 的单文件原子替换完成；但 Work Item 文件和索引是两个独立写入，没有跨文件事务或进程锁。
-- `implementation_worktree_digest` 读取 `git status --porcelain -z --untracked-files=all`，按状态、路径和文件内容摘要排序后计算指纹；排除 `docs/features/`、`docs/work-items/`、`docs/superpowers/`，因此维护管理文档不会使实现基线失效。
+- `implementation_snapshot.py` 按有效实现路径、类型、模式及内容计算指纹；排除 `docs/features/`、`docs/work-items/`、`docs/superpowers/`，因此维护管理文档不会使实现基线失效。
 - 没有消息投递、重试、分布式锁或幂等键；幂等边界是稳定文件/记录 ID、拒绝覆盖和验证快照相等。并行调用时索引重建与状态迁移仍可能竞争。
 
 ## 安全与权限
@@ -163,6 +163,8 @@
 - 用户回归、服务发布顺序和临时部署事实属于关联 Work Item 的 `## 用户回归`；当前 Feature Doc 遵循新契约，不复制瞬时回归交接段。
 
 ## 测试与验证
+
+本次版本化快照整改的验证记录见最新变更记录；以下测试包含以前版本的历史验证。
 
 ### 已执行
 
@@ -191,10 +193,10 @@
 
 ### DEC-002 — 以验证快照约束交付与关闭
 
-- **决定**：进入 `verifying` 时记录 `HEAD` 与实现工作区摘要，`handoff-ready`/`closed` 必须匹配；管理文档目录不计入摘要。
+- **决定**：进入 `verifying` 时记录 v2 有效实现摘要，`handoff-ready`/`closed` 及 PASS 证据必须匹配；管理文档目录不计入摘要。
 - **原因**：阻止在验证后修改实现却继续沿用旧验证结论，同时允许 Feature/Work 文档在知识收尾阶段更新。
 - **取舍**：Git 仓库获得强新鲜度保证；legacy Work Item 仍可做 structural 校验，但 Git 交付/关闭需要补齐新基线。
-- **证据**：`scripts/dev_work.py` 的 `implementation_worktree_digest`、`verification_basis`、`gate_errors`，以及 `test_rejects_stale_verification_basis` 和相关 Git 回归测试。
+- **证据**：`scripts/implementation_snapshot.py` 和 `scripts/dev_work.py` 的 `verification_basis`、`gate_errors`，以及 `test_rejects_stale_verification_basis` 和相关 Git 回归测试。
 
 ### DEC-003 — Feature Closeout 复用 canonical 合约校验器
 
@@ -225,6 +227,14 @@
 - **后续动作**：只有出现服务化集成需求时，才在 Work Item 中补充基于仓库证据的发布/回归交接，并另行设计外部系统集成。
 
 ## 变更记录
+
+### 2026-11-15 — 修复快照与验证证据
+
+- **状态**：已完成
+- **变化**：使用 v2 有效实现快照、验证证据绑定及显式迁移，修复 CLI 输入和索引故障恢复。
+- **原因**：避免管理文档提交误报与过期 PASS 证据放行。
+- **兼容性**：旧 HEAD 基线仍可结构读取；Git fresh 与交付要求重新核验并使用 v2。
+- **验证**：两个 Skill 分别 58、63 项测试，跨 Skill 2 项测试及独立审查通过；模型端到端评测未运行。
 
 ### 2026-11-15 — 接入研发专项技能路由
 

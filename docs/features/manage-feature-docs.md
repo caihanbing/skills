@@ -6,7 +6,7 @@
 <!-- feature-status: active -->
 <!-- feature-summary: 以仓库证据创建、查找、核验和维护稳定功能的技术档案。 -->
 <!-- last-verified: 2026-11-15 -->
-<!-- code-basis: HEAD 5c9344930879; worktree-digest sha256:731a57515abd180fc11d3f0004c62f6e71f4b7dd395917aa5421ec5cfafa7e45 -->
+<!-- code-basis: impl-v2 sha256:9d5857e16ccd331acd0d27c9a65e2fe278e398255e6e1eec0f70e288bbf3c347 -->
 
 ## 快速上下文
 
@@ -66,7 +66,7 @@
 - `find --repo <目录> [--query <查询>]`：按 ID、标题、别名和正文的匹配分数排序，输出制表符分隔的分数、元数据和路径；无匹配返回非零状态。
 - `validate --repo <目录> [--id <ID>] [--mode structural|fresh]`：检查目标档案或全部档案，并检查重复 ID、索引与本地链接；`fresh` 额外对照 Git 基线。
 - `validate-contract --repo <目录> --id <ID> [--mode structural|fresh]`：检查指定档案契约及可选快照，不检查目录或索引完整性；被 `manage-dev-work` 调用。
-- `sync-index --repo <目录>`：根据现有档案元数据重建索引托管块，保留块外内容。成功输出路径，校验成功输出 `OK`；错误输出至标准错误并返回非零状态。
+- `snapshot --repo <目录>` 输出 v2 实现摘要；`sync-index --repo <目录>` 根据现有档案元数据重建索引托管块，保留块外内容。成功输出路径，校验成功输出 `OK`；错误输出至标准错误并返回非零状态。
 
 ### 技能打包 CLI
 
@@ -77,7 +77,7 @@
 
 - 每份 Markdown 标题后连续保存 `feature-id`、`feature-title`、`feature-aliases`、`feature-status`、`feature-summary`、`last-verified`、`code-basis`；状态为 `planned`、`active`、`deprecated` 或 `retired`。
 - `feature-id` 为小写 kebab-case，须与文件名一致；索引托管块由全部档案的元数据生成。章节、决策、已知问题与历史记录形状见 `references/document-contract.md`。
-- 新基线为 12 位 HEAD 与工作区 SHA-256 摘要；structural 兼容旧版 clean/dirty 格式和非 Git 标记。fresh 可接受旧版 clean，但拒绝旧版 dirty 和非 Git 工作区。
+- 新基线为 `impl-v2 sha256:<digest>`，覆盖实际实现路径、内容、类型和执行模式；structural 兼容旧 HEAD 格式和非 Git 标记，fresh 拒绝旧格式与非 Git 工作区。
 - 无数据库、数据库索引或迁移；触及旧档案时按当前契约规范化并保留有效历史。
 
 ## 核心流程
@@ -93,7 +93,7 @@
 - 目标文件或 ID 已存在 — `init` 拒绝覆盖 — 检查并维护已有档案。
 - 索引标记不匹配或重复 — 初始化或同步失败 — 修复标记后重试；初始化在索引写入异常时删除新建档案。
 - 元数据、章节、日期、占位符或本地链接不合约 — 校验报错 — 修正文档或索引后重试。
-- HEAD 或实现工作区摘要改变 — fresh 报告基线不匹配 — 重新对照实现并记录新基线。
+- 实际实现内容改变 — fresh 报告基线不匹配 — 重新对照实现并记录新基线。
 - 非 Git 工作区 — structural 支持 `no-git; working-tree=unknown`，fresh 失败 — 不能声称已建立 Git 实现快照。
 - 非唯一或不明确的功能归属 — Skill 要求用户澄清 — CLI 的查找排序不能代替归属判断。
 
@@ -101,7 +101,7 @@
 
 - `init` 使用独占创建并检查已有 ID，重复初始化不会覆盖目标；索引和普通文本更新使用临时文件及 `os.replace` 做单文件原子替换。
 - 档案与索引不是跨文件事务，且没有进程锁；并发初始化或索引重建可能竞争，进程中断也可能造成索引暂时不一致，可检查后运行 `sync-index` 恢复。
-- `implementation_worktree_digest` 对 Git 状态、路径与文件内容计算摘要，排除 `docs/features/`、`docs/work-items/` 和 `docs/superpowers/`；该快照不构成分布式幂等保证。
+- `implementation_snapshot.py` 对有效实现路径、类型、模式和内容计算摘要，排除 `docs/features/`、`docs/work-items/` 和 `docs/superpowers/`；该快照不构成分布式幂等保证。
 
 ## 安全与权限
 
@@ -122,6 +122,8 @@
 - 结构和 fresh 校验是确定性检查，无法证明符号含义、架构描述或不适用判断正确；须对照源码和测试进行语义审计。
 
 ## 测试与验证
+
+本次版本化快照整改的验证记录见最新变更记录；以下测试包含以前版本的历史验证。
 
 ### 已执行
 
@@ -148,7 +150,7 @@
 ### 以共享契约和 Git 基线校验归档
 
 - **决定**：CLI 提供结构及 fresh 校验，Work Item 通过 `validate-contract` 复用档案校验。
-- **原因**：统一文档格式，并检查归档是否对应当前 HEAD 与实现工作区。
+- **原因**：统一文档格式，并检查归档是否对应当前有效实现内容。
 - **取舍**：Git 快照不能替代语义审计；非 Git 工作区不能通过 fresh。
 - **证据**：`feature_docs.py` 的 `fresh_git_errors`、`command_validate_contract`，以及 `dev_work.py` 的 `canonical_feature_validation_errors`。
 
@@ -167,6 +169,14 @@
 - **后续动作**：维护档案时继续执行语义审计；如需证明模型行为，另行运行行为评测并记录结果。
 
 ## 变更记录
+
+### 2026-11-15 — 修复快照与验证证据
+
+- **状态**：已完成
+- **变化**：使用 v2 有效实现快照、验证证据绑定及显式迁移，修复 CLI 输入和索引故障恢复。
+- **原因**：避免管理文档提交误报与过期 PASS 证据放行。
+- **兼容性**：旧 HEAD 基线仍可结构读取；Git fresh 与交付要求重新核验并使用 v2。
+- **验证**：两个 Skill 分别 58、63 项测试，跨 Skill 2 项测试及独立审查通过；模型端到端评测未运行。
 
 ### 2026-11-15 — 接入研发专项技能路由
 

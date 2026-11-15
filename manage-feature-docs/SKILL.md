@@ -122,7 +122,7 @@ Run validation after every creation or update:
 python3 <skill-directory>/scripts/feature_docs.py validate --repo <repository-root> --id <feature-id> --mode structural
 ```
 
-Use `--mode fresh` to compare `code-basis` with the current Git implementation state. Legacy `working-tree=dirty` metadata is structural-only and must be regenerated to the digest form before fresh handoff. Run `sync-index --repo <repository-root>` after batch metadata edits. Do not repair unrelated user-authored prose merely to make it stylistically uniform.
+Use `--mode fresh` to compare `code-basis` with the current implementation snapshot. All legacy HEAD-based bases are structural-only: inspect the current implementation and verification evidence, obtain `impl-v2` with `snapshot --repo <repository-root>`, update the basis explicitly and synchronize the index before fresh handoff. Run `sync-index --repo <repository-root>` after batch metadata edits. Do not repair unrelated user-authored prose merely to make it stylistically uniform.
 
 Use `validate-contract --repo <repository-root> --id <feature-id>` when another Skill needs to validate one Feature Doc without imposing catalog or index checks.
 

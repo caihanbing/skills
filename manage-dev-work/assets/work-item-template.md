@@ -82,6 +82,7 @@
 
 - **关联需求**：REQ-001
 - **状态**：OPEN
+- **证据基线**：pending
 - **证据**：WORK_ITEM:REPLACE
 
 ## 代码审查
@@ -89,6 +90,7 @@
 ### REV-001 — 审查结论
 
 - **状态**：OPEN
+- **证据基线**：pending
 - **范围**：WORK_ITEM:REPLACE
 - **证据**：WORK_ITEM:REPLACE
 
