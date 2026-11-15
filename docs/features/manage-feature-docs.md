@@ -6,7 +6,7 @@
 <!-- feature-status: active -->
 <!-- feature-summary: 以仓库证据创建、查找、核验和维护稳定功能的技术档案。 -->
 <!-- last-verified: 2026-11-15 -->
-<!-- code-basis: HEAD 0d5ebcceb471; worktree-digest sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 -->
+<!-- code-basis: HEAD 5c9344930879; worktree-digest sha256:731a57515abd180fc11d3f0004c62f6e71f4b7dd395917aa5421ec5cfafa7e45 -->
 
 ## 快速上下文
 
@@ -40,6 +40,8 @@
 - 不覆盖已有档案；写入内容以完成的实现及验证证据为准，并同步元数据与索引。
 
 ## 业务行为
+
+- 支持前后端功能上下文；适用时在既有章节记录界面入口、交互状态、响应式与可访问性证据。档案维护按 `manage-feature-docs/references/diagram-routing.md` 有条件调用 `archify`；涉及未提交源码的证据图延期。
 
 - `manage-feature-docs/agents/openai.yaml` 设置 `allow_implicit_invocation: false`，Skill 面向显式调用。
 - 首选用户指定仓库，否则使用当前 Git 根目录；按 ID、标题、别名和正文检索并读取可能匹配项。
@@ -165,6 +167,14 @@
 - **后续动作**：维护档案时继续执行语义审计；如需证明模型行为，另行运行行为评测并记录结果。
 
 ## 变更记录
+
+### 2026-11-15 — 接入研发专项技能路由
+
+- **状态**：已完成
+- **变化**：接入条件式专项路由，扩展前后端档案记录指引。
+- **原因**：提高研发与功能知识维护效率。
+- **兼容性**：保留 CLI、固定章节与快照算法；专项技能按需发现。
+- **验证**：两个 Skill 测试 45 项和 49 项、跨 Skill 测试 1 项通过；路由进行了静态独立复核。
 
 ### 2026-11-15 — 创建功能档案管理档案
 

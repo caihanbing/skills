@@ -1,0 +1,7 @@
+# Optional technical diagrams
+
+During archive/update, use the available `$archify` skill when the user requests a technical diagram or a complex architecture, call chain, asynchronous state or data relationship is materially clearer as a diagram. Reuse a correct existing diagram. A read-only or analysis-only request does not create a file. Follow Archify's own repository evidence and delivery rules.
+
+Archify verifies repository evidence against a pinned committed revision. If relevant source paths include uncommitted changes, defer the evidence-backed diagram until they are committed; explain that the diagram remains outdated or absent. Never commit automatically or treat a previous revision's diagram as evidence for uncommitted implementation. Unrelated dirty paths do not by themselves block the diagram.
+
+Put a durable diagram in a repository-local asset directory for its feature and link it from the relevant existing section, retaining a textual explanation. Prefer completing artifact writes before taking the verification basis. If a diagram is first needed at closeout and its files change the implementation digest, return to implementing and repeat verification; changes solely to excluded management documents may proceed at closeout. Do not widen digest exclusions. If Archify is unavailable, report the limitation, continue independent documentation work and do not claim a diagram was produced; never install it automatically.

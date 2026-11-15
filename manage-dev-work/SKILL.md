@@ -7,6 +7,8 @@ description: Use for substantive requirements analysis, feature development, or 
 
 Manage the short-lived delivery lifecycle of one development work item. Keep durable system knowledge in Feature Docs; do not turn a Work Item into a second Feature Doc.
 
+For code, UI, or technical visualization work, read [specialist-routing.md](references/specialist-routing.md) and invoke applicable available skills at the relevant stage. Preserve explicit user scope, read-only boundaries and all gates below.
+
 ## Start or restore work
 
 1. Resolve the repository root and inspect `docs/work-items/index.md`.

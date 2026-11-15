@@ -1,6 +1,6 @@
 ---
 name: manage-feature-docs
-description: Use when explicitly invoked to create, locate, verify, read, or incrementally maintain repository-local backend feature documentation after requirements analysis, feature development, incremental changes, bug fixes, or document-drift audits.
+description: Use when explicitly invoked to create, locate, verify, read, or incrementally maintain repository-local frontend or backend feature documentation after requirements analysis, feature development, incremental changes, bug fixes, or document-drift audits.
 ---
 
 # Manage Feature Docs
@@ -17,6 +17,8 @@ Infer the requested operation from the prompt:
 - **Audit**: validate structure and compare documented claims with the repository; change files only when the user requested repairs.
 
 Respect an explicit read-only or analysis-only boundary. Do not create or update documentation in that mode.
+
+For optional repository-backed diagrams during archive or update, read [diagram-routing.md](references/diagram-routing.md). Development requests delegate specialist work to `$manage-dev-work`; on return, resume directly in archive/update mode without re-entering development unless a new substantive issue requires it.
 
 ## Enforce the clarification gate
 

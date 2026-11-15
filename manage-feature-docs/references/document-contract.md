@@ -45,6 +45,8 @@ Preserve this exact order of level-two headings:
 
 Write concise Chinese current-state prose. Use backticks for paths, symbols, commands, configuration keys, and protocol fields. Use bullets for facts, numbered lists for flows, and tables only for repeated fields. Use `待确认：<原因与确认方式>` only after the user explicitly defers a non-blocking item.
 
+For frontend features, use existing sections to record evidenced entry points, user flows, loading/empty/error states, responsive and accessibility behavior, and verification where applicable. Link the design system and durable visual artifacts rather than duplicating them. Backend-only features need no UI-specific content. Do not add or reorder required headings.
+
 ## Evidence and updates
 
 Anchor material claims with repository-relative paths, symbols, tests, migrations, or commands. Do not include secrets, large source excerpts, or fragile line numbers.

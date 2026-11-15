@@ -5,8 +5,8 @@
 <!-- feature-aliases: 研发流程管理, development work management -->
 <!-- feature-status: active -->
 <!-- feature-summary: 面向仓库本地研发工作的 Work Item 生命周期、质量门禁与 Feature Docs Closeout。 -->
-<!-- last-verified: 2026-09-14 -->
-<!-- code-basis: HEAD 154afc22215f; worktree-digest sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 -->
+<!-- last-verified: 2026-11-15 -->
+<!-- code-basis: HEAD 5c9344930879; worktree-digest sha256:731a57515abd180fc11d3f0004c62f6e71f4b7dd395917aa5421ec5cfafa7e45 -->
 
 ## 快速上下文
 
@@ -49,6 +49,8 @@
 - 有 `feature-ids` 时，关闭证据必须按相同顺序列出每个 Feature ID，且每个文档都必须通过 canonical Feature Docs 合约校验。
 
 ## 业务行为
+
+- `manage-dev-work/references/specialist-routing.md` 将编码、UI 和复杂技术图任务分别按条件路由至 `ponytail`、`impeccable` 和 `archify`；专项产物按验证基线规则处理，收尾按归档模式回到 Feature Docs。
 
 - 研发人员或 Agent 以 `init` 创建 `intake` 状态的 Work Item；模板预置一个需求、决策、风险、计划、验证、审查、发布、用户回归和长期知识提炼记录。
 - `clarified` 要求不再存在 `BLOCKER` 决策；`planned` 还要求至少一个完整需求与验收标准、所有影响维度明确，以及开放决策/风险具有确认路径。
@@ -223,6 +225,14 @@
 - **后续动作**：只有出现服务化集成需求时，才在 Work Item 中补充基于仓库证据的发布/回归交接，并另行设计外部系统集成。
 
 ## 变更记录
+
+### 2026-11-15 — 接入研发专项技能路由
+
+- **状态**：已完成
+- **变化**：接入条件式专项路由，扩展前后端档案记录指引。
+- **原因**：提高研发与功能知识维护效率。
+- **兼容性**：保留 CLI、固定章节与快照算法；专项技能按需发现。
+- **验证**：两个 Skill 测试 45 项和 49 项、跨 Skill 测试 1 项通过；路由进行了静态独立复核。
 
 ### 2026-09-14 — 创建“研发过程管理”功能档案
 
