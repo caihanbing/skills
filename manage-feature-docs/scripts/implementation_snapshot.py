@@ -29,6 +29,36 @@ def _snapshot(root: Path) -> str:
     top = Path(os.fsdecode(git('rev-parse', '--show-toplevel').strip())).resolve()
     if top != root:
         raise SnapshotError('snapshot requires the Git repository root')
+    def check_sparse(repo, submodule=False):
+        def query(*args):
+            result = subprocess.run(['git', '-C', str(repo), *args], capture_output=True)
+            if result.returncode:
+                raise SnapshotError('git ' + ' '.join(args) + ': ' + result.stderr.decode(errors='replace').strip())
+            return result.stdout
+
+        config = subprocess.run(['git', '-C', str(repo), 'config', '--bool', '--get', 'core.sparseCheckout'], capture_output=True)
+        if config.returncode not in (0, 1) or (config.returncode == 0 and config.stdout.strip() not in (b'true', b'false')):
+            raise SnapshotError('cannot read sparse checkout configuration')
+        if config.returncode == 0 and config.stdout.strip() == b'true':
+            raise SnapshotError('sparse checkout is unsupported')
+        entries = query('ls-files', '-v', '-z').split(b'\0')
+        if any(record[:1] in (b'S', b's') for record in entries):
+            raise SnapshotError('skip-worktree entries are unsupported')
+        if submodule and any(record[:1] in b'abcdefghijklmnopqrstuvwxyz' for record in entries if record):
+            raise SnapshotError('assume-unchanged submodule entries are unsupported')
+        index_entries = query('ls-files', '--sparse', '--stage', '-z').split(b'\0')
+        if any(record.startswith(b'040000 ') for record in index_entries):
+            raise SnapshotError('sparse index is unsupported')
+        branch_status = query('status', '--porcelain=v2', '--branch', '-z')
+        head_entries = [] if b'# branch.oid (initial)' in branch_status else query('ls-tree', '-r', '-z', 'HEAD').split(b'\0')
+        gitlinks = {record.split(b'\t', 1)[1] for record in index_entries + head_entries if record.startswith(b'160000 ')}
+        for raw in sorted(gitlinks):
+            child = repo / os.fsdecode(raw)
+            if not (child / '.git').exists():
+                raise SnapshotError('uninitialized submodule: ' + str(child))
+            check_sparse(child, True)
+
+    check_sparse(root)
     if git('ls-files', '-u', '-z'):
         raise SnapshotError('unmerged index entries')
     index = git('ls-files', '--stage', '-z')
@@ -113,6 +143,7 @@ def _snapshot(root: Path) -> str:
         head = subprocess.run(['git', '-C', str(sub), 'rev-parse', 'HEAD'], capture_output=True)
         if status.returncode or status.stdout or head.returncode or head.stdout.strip() != prior:
             raise SnapshotError('submodule changed while hashing: ' + os.fsdecode(raw))
+    check_sparse(root)
     if before != listing() or index != git('ls-files', '--stage', '-z') or branch != git('status', '--porcelain=v2', '--branch', '-z'):
         raise SnapshotError('repository changed while hashing')
     return 'impl-v2 sha256:' + digest.hexdigest()

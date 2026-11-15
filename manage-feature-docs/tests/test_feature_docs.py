@@ -207,3 +207,19 @@ class RegressionHandoffContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class IndexEscapingTests(unittest.TestCase):
+    def test_untrusted_cell_is_literal(self):
+        value = '<img src=x onerror=alert(1)> [link](url) `code` | &'
+        escaped = FEATURE_DOCS.escape_table_cell(value)
+        self.assertNotIn('<img', escaped)
+        self.assertNotIn('[link]', escaped)
+        self.assertIn('&#', escaped)
+
+    def test_index_id_remains_literal_inside_code_span(self):
+        doc = FEATURE_DOCS.FeatureDocument(Path('sample-feature.md'), '', '', {
+            'feature-id': 'sample-feature', 'feature-title': 'Example',
+        })
+        block = FEATURE_DOCS.build_index_block([doc])
+        self.assertIn('[`sample-feature`](sample-feature.md)', block)
+        self.assertNotIn('sample&#45;feature', block)

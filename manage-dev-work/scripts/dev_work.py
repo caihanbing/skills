@@ -601,7 +601,8 @@ def gate_errors(
 
     if target in {"implementing", "verifying", "handoff-ready", "closed"}:
         checkbox_lines = re.findall(r"^[ \t]*[-+*][ \t]+\[.*$", plan, re.MULTILINE)
-        if (not checkbox_lines or any(not re.fullmatch(r"[ \t]*[-+*][ \t]+\[[xX]\][ \t]+\S.*", line) for line in checkbox_lines)
+        if (not checkbox_lines or any(not re.fullmatch(r"[ \t]*[-+*][ \t]+\[[ xX]\][ \t]+\S.*", line) for line in checkbox_lines)
+                or (target != "implementing" and any(re.match(r"[ \t]*[-+*][ \t]+\[ \]", line) for line in checkbox_lines))
                 or "WORK_ITEM:REPLACE" in plan):
             errors.append("implementation plan is incomplete")
 

@@ -231,7 +231,11 @@ def validate_contract_document(document: FeatureDocument, repo: Path) -> list[st
 
 
 def escape_table_cell(value: str) -> str:
-    return value.replace("|", "\\|").replace("\n", " ").strip()
+    # Character references remain literal text when Markdown syntax is parsed.
+    return "".join(
+        " " if c in "\r\n" else f"&#{ord(c)};" if c in "&<>\\`*_{}[]()#+-.!|~\"'" else c
+        for c in value
+    ).strip()
 
 
 def build_index_block(documents: Iterable[FeatureDocument]) -> str:
@@ -244,6 +248,8 @@ def build_index_block(documents: Iterable[FeatureDocument]) -> str:
     for doc in ordered:
         metadata = doc.metadata
         feature_id = metadata.get("feature-id", "待确认")
+        if not FEATURE_ID_RE.fullmatch(feature_id):
+            raise FeatureDocsError(f"invalid feature ID in index: {feature_id}")
         title = metadata.get("feature-title", "待确认")
         aliases = metadata.get("feature-aliases", "") or "—"
         status = metadata.get("feature-status", "待确认")
@@ -253,7 +259,7 @@ def build_index_block(documents: Iterable[FeatureDocument]) -> str:
             "| "
             + " | ".join(
                 (
-                    f"[`{escape_table_cell(feature_id)}`]({doc.path.name})",
+                    f"[`{feature_id}`]({doc.path.name})",
                     escape_table_cell(title),
                     escape_table_cell(aliases),
                     escape_table_cell(status),

@@ -6,7 +6,7 @@
 <!-- feature-status: active -->
 <!-- feature-summary: 面向仓库本地研发工作的 Work Item 生命周期、质量门禁与 Feature Docs Closeout。 -->
 <!-- last-verified: 2026-11-15 -->
-<!-- code-basis: impl-v2 sha256:9d5857e16ccd331acd0d27c9a65e2fe278e398255e6e1eec0f70e288bbf3c347 -->
+<!-- code-basis: impl-v2 sha256:97696031aed164db346ad2e10d6df9585dae87b73a676203648fbde9a6111e3d -->
 
 ## 快速上下文
 
@@ -54,7 +54,7 @@
 
 - 研发人员或 Agent 以 `init` 创建 `intake` 状态的 Work Item；模板预置一个需求、决策、风险、计划、验证、审查、发布、用户回归和长期知识提炼记录。
 - `clarified` 要求不再存在 `BLOCKER` 决策；`planned` 还要求至少一个完整需求与验收标准、所有影响维度明确，以及开放决策/风险具有确认路径。
-- `implementing` 只在计划存在且具体事项全部勾选完成后进入；`verifying` 要求实施证据完整，并写入实现验证快照。
+- `implementing` 要求存在格式正确的具体计划，允许未完成事项；`verifying` 要求保留计划全部完成、实施证据完整，并写入实现验证快照。
 - `handoff-ready` 要求需求验证证据、全部验证记录为 `PASS`、中高风险最新审查为 `PASS`、风险不再为 `OPEN`，并完成用户回归交接；高风险还必须有发布和回滚策略，bugfix 还必须完整记录根因、失败机制、修复和回归保护。
 - `closed` 要求用户回归结果与“是否需要用户回归”一致，并完成长期 Feature Docs 证据和文档合约校验；用户回归需要真实用户确认通过时，CLI 不会代替确认。
 - Markdown Work Item 是人与 CLI 共同消费的兼容接口；旧 Work Item 可在结构校验阶段缺少 `verification-basis`，但 Git 仓库的交付/关闭门禁仍要求新鲜验证基线。
@@ -116,8 +116,8 @@
 1. `init` 解析仓库，校验 Work Item ID、标题、类型、风险和 Feature IDs，从模板创建 `intake` 文档，并同步 `docs/work-items/index.md`。
 2. `intake → clarified` 只允许在结构有效且没有 `BLOCKER` 决策时迁移；`blocked` 只能恢复到 `clarified` 或取消，异常路径不会自动绕过澄清。
 3. `clarified → planned` 检查需求与验收标准、14 个影响维度、风险最低等级，以及开放决策/风险的确认路径。
-4. `planned → implementing` 检查实施计划至少有一项且不存在未勾选项；`implementing` 允许在补充实现或处理失败验证后继续。
-5. `implementing → verifying` 检查计划已完成或显式延期、需求已有实现证据，然后用 `verification_basis` 写入当前有效实现的 v2 摘要；实现内容变化时失效旧 PASS 和已通过的用户回归。
+4. `planned → implementing` 检查实施计划至少有一项且格式合法，允许未勾选项；`implementing` 允许在补充实现或处理失败验证后继续。
+5. `implementing → verifying` 检查保留的计划项全部完成、需求已有实现证据，然后用 `verification_basis` 写入当前有效实现的 v2 摘要；实现内容变化时失效旧 PASS 和已通过的用户回归。
 6. `verifying → handoff-ready` 检查基线仍匹配，所有需求有验证证据，验证记录全部 `PASS`，中高风险最新审查通过，风险已处理，用户回归交接字段完整；高风险还检查发布/回滚策略。
 7. `handoff-ready → closed` 检查用户回归结果（需要回归时必须是 `passed`，不需要时必须是 `not-required`）、Feature Docs 证据及每个关联文档的 canonical 校验；成功后更新状态、更新时间并同步索引。
 8. 每次成功迁移都更新 `work-status` 和 `updated`；仅进入 `verifying` 时写入 `verification-basis`。任一门禁失败都返回错误，不更新 Work Item 状态。
@@ -164,17 +164,11 @@
 
 ## 测试与验证
 
-本次版本化快照整改的验证记录见最新变更记录；以下测试包含以前版本的历史验证。
-
 ### 已执行
 
-- `python3 -m unittest discover -s manage-dev-work/tests -p 'test*.py'` — 49/49 通过；覆盖生命周期迁移、风险与影响门禁、记录引用、快照新鲜度、Feature Doc Closeout 和异常状态。
-- `python3 -m unittest discover -s manage-feature-docs/tests -p 'test*.py'` — 45/45 通过；覆盖被依赖的 Feature Doc 结构、日期、链接、索引和 fresh/structural 合约。
-- `python3 -m unittest discover -s tests -p 'test*.py'` — 1/1 通过；覆盖 `manage-dev-work` 调用 sibling canonical Feature validator 的跨 Skill 集成。
-- `python3 -m py_compile manage-dev-work/scripts/dev_work.py manage-feature-docs/scripts/feature_docs.py` — 通过；两份核心脚本可编译。
-- `python3 manage-feature-docs/scripts/feature_docs.py validate --repo /Users/caihanbing/dev/skills --id manage-dev-work --mode structural` — 通过；当前 Feature Doc 满足结构、元数据、固定章节、历史和本地链接契约。
-- `python3 manage-feature-docs/scripts/feature_docs.py validate --repo /Users/caihanbing/dev/skills --id manage-dev-work --mode fresh` — 通过；`HEAD 154afc22215f` 与实现工作区摘要匹配，管理文档变更被正确排除。
-- `git diff --check` — 通过；当前文档改动无空白错误。
+- `python3 -m unittest discover -s manage-feature-docs/tests -p 'test*.py'` — 65 项通过；`manage-dev-work/tests` 63 项通过；仓库级 `tests` 2 项通过。
+- 两个正式 ZIP 并列解包后分别通过 65 项和 63 项测试；在隔离 Git 仓库中关联 Feature Doc 的完整关闭流程通过。
+- 本机 Skill 格式校验通过；本版档案和 Work Item 的 fresh／关闭门禁由交付前检查验证。
 
 ### 未执行
 
@@ -227,6 +221,14 @@
 - **后续动作**：只有出现服务化集成需求时，才在 Work Item 中补充基于仓库证据的发布/回归交接，并另行设计外部系统集成。
 
 ## 变更记录
+
+### 2026-11-15 — 修复阶段门与稀疏快照
+
+- **状态**：已完成
+- **变化**：拆分实施与验证计划门；拒绝稀疏检出与子模块隐藏状态；转义 Feature 索引。
+- **原因**：修正流程时序和快照漏检，避免不安全的目录输出。
+- **兼容性**：完整检出保留 v2 算法；稀疏检出须改用完整工作树。
+- **验证**：两个 Skill 65、63 项和仓库级 2 项测试通过；干净 ZIP 解包测试与 Git 关闭流程通过。
 
 ### 2026-11-15 — 修复快照与验证证据
 

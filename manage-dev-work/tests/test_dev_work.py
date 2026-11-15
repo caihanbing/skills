@@ -805,7 +805,7 @@ class NewContractTests(unittest.TestCase):
             with self.assertRaises(DEV_WORK.DevWorkError):
                 DEV_WORK.verification_basis(repo)
 
-    def test_nested_unchecked_plan_item_blocks_implementation(self):
+    def test_nested_unchecked_plan_item_allows_implementation(self):
         with tempfile.TemporaryDirectory() as directory:
             repo = Path(directory)
             path = DEV_WORK.init_work_item(repo, None, 'title', 'feature', 'low', ())
@@ -813,6 +813,8 @@ class NewContractTests(unittest.TestCase):
             text = path.read_text().replace('- [x] 已完成', '- [x] 已完成\n  - [ ] critical')
             path.write_text(text)
             errors = DEV_WORK.gate_errors(DEV_WORK.read_work_item(path), 'implementing')
+            self.assertFalse(any('plan is incomplete' in error for error in errors), errors)
+            errors = DEV_WORK.gate_errors(DEV_WORK.read_work_item(path), 'verifying')
             self.assertTrue(any('plan is incomplete' in error for error in errors), errors)
 
     def test_invalid_nested_checkbox_blocks_implementation(self):

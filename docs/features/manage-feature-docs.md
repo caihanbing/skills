@@ -6,7 +6,7 @@
 <!-- feature-status: active -->
 <!-- feature-summary: 以仓库证据创建、查找、核验和维护稳定功能的技术档案。 -->
 <!-- last-verified: 2026-11-15 -->
-<!-- code-basis: impl-v2 sha256:9d5857e16ccd331acd0d27c9a65e2fe278e398255e6e1eec0f70e288bbf3c347 -->
+<!-- code-basis: impl-v2 sha256:97696031aed164db346ad2e10d6df9585dae87b73a676203648fbde9a6111e3d -->
 
 ## 快速上下文
 
@@ -77,7 +77,7 @@
 
 - 每份 Markdown 标题后连续保存 `feature-id`、`feature-title`、`feature-aliases`、`feature-status`、`feature-summary`、`last-verified`、`code-basis`；状态为 `planned`、`active`、`deprecated` 或 `retired`。
 - `feature-id` 为小写 kebab-case，须与文件名一致；索引托管块由全部档案的元数据生成。章节、决策、已知问题与历史记录形状见 `references/document-contract.md`。
-- 新基线为 `impl-v2 sha256:<digest>`，覆盖实际实现路径、内容、类型和执行模式；structural 兼容旧 HEAD 格式和非 Git 标记，fresh 拒绝旧格式与非 Git 工作区。
+- 新基线为 `impl-v2 sha256:<digest>`，覆盖实际实现路径、内容、类型和执行模式；structural 兼容旧 HEAD 格式和非 Git 标记，fresh 拒绝旧格式与非 Git 工作区。稀疏检出、skip-worktree、稀疏索引和子模块 assume-unchanged 拒绝生成可信快照；空目录、忽略的未跟踪文件与外部运行产物不在快照范围。
 - 无数据库、数据库索引或迁移；触及旧档案时按当前契约规范化并保留有效历史。
 
 ## 核心流程
@@ -123,15 +123,11 @@
 
 ## 测试与验证
 
-本次版本化快照整改的验证记录见最新变更记录；以下测试包含以前版本的历史验证。
-
 ### 已执行
 
-- `python3 -m unittest discover -s manage-feature-docs/tests -p 'test*.py'` — 45 项通过；覆盖档案结构、索引、查找、快照、旧回归章节和打包过滤。
-- `python3 -m unittest discover -s manage-dev-work/tests -p 'test*.py'` — 49 项通过；覆盖 Work Item 门禁及 Feature Docs 集成相关行为。
-- `python3 -m unittest discover -s tests -p 'test*.py'` — 1 项通过；覆盖同级 canonical 校验器调用。
-- `python3 manage-feature-docs/scripts/feature_docs.py validate --repo . --mode structural` — 现有档案与索引的结构校验通过，执行于新档案创建前。
-- 新档案的 `validate --id manage-feature-docs` structural、fresh 和 `validate-contract --mode fresh` — 均通过；全目录 structural 校验及 `git diff --check` 通过。
+- `python3 -m unittest discover -s manage-feature-docs/tests -p 'test*.py'` — 65 项通过；`manage-dev-work/tests` 63 项通过；仓库级 `tests` 2 项通过。
+- 两个正式 ZIP 并列解包后分别通过 65 项和 63 项测试；在隔离 Git 仓库中关联 Feature Doc 的完整关闭流程通过。
+- 本机 Skill 格式校验通过；本版档案和 Work Item 的 fresh／关闭门禁由交付前检查验证。
 
 ### 未执行
 
@@ -169,6 +165,14 @@
 - **后续动作**：维护档案时继续执行语义审计；如需证明模型行为，另行运行行为评测并记录结果。
 
 ## 变更记录
+
+### 2026-11-15 — 修复阶段门与稀疏快照
+
+- **状态**：已完成
+- **变化**：拆分实施与验证计划门；拒绝稀疏检出与子模块隐藏状态；转义 Feature 索引。
+- **原因**：修正流程时序和快照漏检，避免不安全的目录输出。
+- **兼容性**：完整检出保留 v2 算法；稀疏检出须改用完整工作树。
+- **验证**：两个 Skill 65、63 项和仓库级 2 项测试通过；干净 ZIP 解包测试与 Git 关闭流程通过。
 
 ### 2026-11-15 — 修复快照与验证证据
 

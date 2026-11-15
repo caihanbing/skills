@@ -209,3 +209,115 @@ class SnapshotTests(unittest.TestCase):
             (root / 'child' / 'file').write_text('dirty')
             with self.assertRaises(module.SnapshotError):
                 module.snapshot(root)
+
+    def test_sparse_config_and_skip_worktree_are_rejected(self):
+        for script in (SCRIPT, SCRIPT.parents[2] / 'manage-dev-work/scripts/implementation_snapshot.py'):
+            spec = importlib.util.spec_from_file_location('sparse_snapshot', script)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            with tempfile.TemporaryDirectory() as tmp:
+                def git(*args):
+                    subprocess.run(['git', '-C', tmp, *args], check=True, capture_output=True)
+                git('init')
+                (Path(tmp) / 'a').write_text('a')
+                git('add', 'a')
+                git('config', 'core.sparseCheckout', 'true')
+                with self.assertRaises(module.SnapshotError): module.snapshot(Path(tmp))
+                git('config', 'core.sparseCheckout', 'false')
+                git('update-index', '--skip-worktree', 'a')
+                with self.assertRaises(module.SnapshotError): module.snapshot(Path(tmp))
+
+    def test_sparse_index_linked_worktree_and_config_error(self):
+        from unittest.mock import patch
+        spec = importlib.util.spec_from_file_location('sparse_linked', SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'repo'
+            root.mkdir()
+            def git(*args):
+                subprocess.run(['git', '-C', str(root), *args], check=True, capture_output=True)
+            git('init')
+            git('config', 'user.email', 'test@example.com')
+            git('config', 'user.name', 'Test')
+            for name in ('one/a', 'two/b'):
+                path = root / name
+                path.parent.mkdir(exist_ok=True)
+                path.write_text(name)
+            git('add', '.')
+            git('commit', '-m', 'init')
+            linked = Path(tmp) / 'linked'
+            git('worktree', 'add', '-b', 'linked', str(linked))
+            subprocess.run(['git', '-C', str(linked), 'sparse-checkout', 'init', '--cone', '--sparse-index'], check=True, capture_output=True)
+            subprocess.run(['git', '-C', str(linked), 'sparse-checkout', 'set', 'one'], check=True, capture_output=True)
+            with self.assertRaises(module.SnapshotError): module.snapshot(linked)
+            original = module.subprocess.run
+            def fail_config(args, **kwargs):
+                if 'config' in args:
+                    return subprocess.CompletedProcess(args, 3, b'', b'error')
+                return original(args, **kwargs)
+            with patch.object(module.subprocess, 'run', side_effect=fail_config):
+                with self.assertRaises(module.SnapshotError): module.snapshot(root)
+
+    def test_submodule_skip_worktree_is_rejected(self):
+        spec = importlib.util.spec_from_file_location('snapshot_sub_sparse', SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / 'root'
+            child = Path(tmp) / 'source'
+            root.mkdir(); child.mkdir()
+            def git(path, *args):
+                subprocess.run(['git', '-C', str(path), *args], check=True, capture_output=True)
+            for path in (root, child):
+                git(path, 'init')
+                git(path, 'config', 'user.name', 'Test')
+                git(path, 'config', 'user.email', 'test@example.com')
+            (child / 'f').write_text('original')
+            git(child, 'add', '.')
+            git(child, 'commit', '-m', 'initial')
+            git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', str(child), 'sub')
+            git(root, 'commit', '-am', 'submodule')
+            module.snapshot(root)
+            git(root / 'sub', 'update-index', '--skip-worktree', 'f')
+            (root / 'sub' / 'f').write_text('changed')
+            with self.assertRaises(module.SnapshotError): module.snapshot(root)
+
+    def test_submodule_assume_unchanged_is_rejected(self):
+        spec = importlib.util.spec_from_file_location('snapshot_sub_assume', SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, child = Path(tmp) / 'root', Path(tmp) / 'child'
+            root.mkdir(); child.mkdir()
+            def git(path, *args):
+                subprocess.run(['git', '-C', str(path), *args], check=True, capture_output=True)
+            for path in (root, child):
+                git(path, 'init'); git(path, 'config', 'user.name', 'Test'); git(path, 'config', 'user.email', 'test@example.com')
+            (child / 'f').write_text('original')
+            git(child, 'add', '.'); git(child, 'commit', '-m', 'initial')
+            git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', str(child), 'sub')
+            git(root, 'commit', '-am', 'submodule')
+            git(root / 'sub', 'update-index', '--assume-unchanged', 'f')
+            (root / 'sub' / 'f').write_text('changed')
+            with self.assertRaises(module.SnapshotError): module.snapshot(root)
+
+    def test_staged_deleted_submodule_still_checked_for_sparse_flags(self):
+        spec = importlib.util.spec_from_file_location('snapshot_deleted_sub_sparse', SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            root, child = Path(tmp) / 'root', Path(tmp) / 'child'
+            root.mkdir(); child.mkdir()
+            def git(path, *args):
+                subprocess.run(['git', '-C', str(path), *args], check=True, capture_output=True)
+            for path in (root, child):
+                git(path, 'init'); git(path, 'config', 'user.name', 'Test'); git(path, 'config', 'user.email', 'test@example.com')
+            (child / 'f').write_text('original')
+            git(child, 'add', '.'); git(child, 'commit', '-m', 'initial')
+            git(root, '-c', 'protocol.file.allow=always', 'submodule', 'add', str(child), 'sub')
+            git(root, 'commit', '-am', 'submodule')
+            git(root, 'rm', '--cached', 'sub')
+            git(root / 'sub', 'update-index', '--skip-worktree', 'f')
+            (root / 'sub' / 'f').write_text('changed')
+            with self.assertRaises(module.SnapshotError): module.snapshot(root)

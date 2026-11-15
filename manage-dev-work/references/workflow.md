@@ -8,8 +8,8 @@ Use `intake → clarified → planned → implementing → verifying → handoff
 | --- | --- |
 | `clarified` | No `BLOCKER` decision remains. |
 | `planned` | Scope, at least one requirement and acceptance criterion, and all impact dimensions are resolved. |
-| `implementing` | A concrete plan exists. |
-| `verifying` | Planned implementation items are complete or explicitly deferred. |
+| `implementing` | A concrete, well-formed plan exists; unchecked items are allowed. |
+| `verifying` | All retained plan items are complete. Deferred scope is tracked through the existing requirement, decision and follow-up Work Item records. |
 | `handoff-ready` | Requirements have verification evidence; medium/high review passes; high risk includes release and rollback; user regression handoff is complete. |
 | `closed` | User regression is passed or not required; durable Feature knowledge is updated. |
 
