@@ -4,6 +4,10 @@
 
 首次准备：计划文件包含已确认计划及修订；验收、授权和验证参数填写具体内容。非 Git 目录必须传 `--paths-file` 指向每行一个项目相对文件路径的清单；Git 项目应指定仓库根目录。
 
+`prepare --protect-paths-file <文件>` 可声明只读文件，每行一个项目相对路径，可声明尚不存在的文件；不能与任务目标重叠。只记录受保护文件的状态和摘要，不复制其内容；若在旧记录中后来新增保护，旧快照可能已经保存过该文件，需自行检查和保管。受保护文件变化后可记录阻塞，但不能通过、解除阻塞或继续派发。Git 忽略文件仅监测任务目标内的文件和显式保护项，其余忽略文件未覆盖。任务目标须为项目相对路径，不允许向上越界、`.git` 或符号链接路径。此检查与快照不构成执行沙箱。Git 子模块仓库目前不支持。
+
+默认允许自动批准；若授权不覆盖自动批准，用 `prepare --no-auto-approve` 禁用，此时运行器拒绝派发，不提供交互审批。重新授权可用 `prepare --auto-approve`。旧 v2 记录未保存此开关时沿用默认；缺少任务摘要的旧记录须重新 `prepare`。运行器每轮校验计划及任务摘要，不能防止能够同时修改记录及摘要的本地用户篡改。
+
 `--tasks-file` 是 UTF-8 JSON，形如：
 
 ```json
@@ -28,6 +32,8 @@ python3 "$runner" run --record "$record" --handoff "$feedback_file"
 ```
 
 `--baseline-reviewed` 表示已实际核对用户既有改动，不能只凭模型报告填写。结果使用 `passed`、`failed` 或 `blocked`；进展用 `yes` 或 `no`。计划变更时再次执行 `prepare` 保存新版本；任务名称和项目必须一致。运行器发现轮次外工作区变化时停止，不能自动覆盖或重置。
+
+正常运行后由审查标记的 `blocked`，在阻塞解除、工作区和只读保护文件与记录一致后，可用 `unblock --record "$record" --evidence "$reason"` 记录解除证据，再续接；运行错误仍须按下面的 `--retry` 或 `--rebuild` 流程恢复。连续三轮无进展、未审查和已完成任务不能通过 `unblock` 绕过限制。
 
 进程中断后先通过 `status`、系统进程信息、日志和工作区确认原进程已结束且不会重复执行；PID 缺失时必须额外确认没有遗留进程。确认后使用 `status --record "$record" --reconcile --evidence "$reconciliation_evidence"` 保存中断快照；PID 缺失时还必须传 `--confirmed-no-process`，表明已独立确认没有遗留进程；审查该轮并记录结果。仅当确认原会话不可恢复且已保存证据时，使用 `run --record "$record" --handoff "$full_handoff" --rebuild --recovery-evidence "$reason"` 创建“任务名 · 恢复 N”会话；完整交接应包含计划、现状和历史结论。脚本不会自动判定会话不可恢复。
 

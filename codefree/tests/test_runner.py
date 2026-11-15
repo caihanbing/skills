@@ -11,7 +11,7 @@ import unittest
 
 RUNNER = Path(__file__).parents[1] / 'scripts' / 'runner.py'
 
-class RunnerTests(unittest.TestCase):
+class RunnerFixture:
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -43,6 +43,7 @@ class RunnerTests(unittest.TestCase):
         return json.loads(result.stdout)
     def prepare(self):
         return self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','criteria','--authorization','scope','--verify','test')
+class RunnerTests(RunnerFixture, unittest.TestCase):
     def test_first_run_title_stdin_and_resume(self):
         self.prepare()
         self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
@@ -224,9 +225,7 @@ class RunnerTests(unittest.TestCase):
             self.call('record-review','--record',self.record,'--result','failed','--evidence','unchanged','--progress','no','--baseline-reviewed')
         self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake,ok=False)
 
-if __name__ == '__main__': unittest.main()
-
-class ConstraintTests(RunnerTests):
+class ConstraintTests(RunnerFixture, unittest.TestCase):
     def test_completed_task_cannot_run_again(self):
         self.prepare()
         self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
@@ -244,7 +243,156 @@ class ConstraintTests(RunnerTests):
         (self.project/'tracked').write_text('external change')
         self.call('record-review','--record',self.record,'--result','passed','--evidence','ok','--progress','yes','--baseline-reviewed',ok=False)
 
+    def test_tampered_plan_is_rejected(self):
+        self.prepare()
+        (self.record / 'plans' / 'plan-001.txt').write_text('tampered')
+        self.call('run', '--record', self.record, '--handoff', self.handoff, '--cli', self.fake, ok=False)
+        self.assertFalse((self.root / 'args').exists())
+
+    def test_tampered_tasks_are_rejected(self):
+        self.prepare()
+        path = self.record / 'plans' / 'tasks-001.json'
+        data = json.loads(path.read_text())
+        data['tasks'][0]['steps'] = ['tampered']
+        path.write_text(json.dumps(data))
+        self.call('run', '--record', self.record, '--handoff', self.handoff, '--cli', self.fake, ok=False)
+        self.assertFalse((self.root / 'args').exists())
+
+    def test_disabled_auto_refuses_dispatch(self):
+        self.call('prepare', '--record', self.record, '--project', self.project, '--title', 'task title', '--plan', self.plan, '--tasks-file', self.tasks, '--criteria', 'criteria', '--authorization', 'scope', '--verify', 'test', '--no-auto-approve')
+        self.call('run', '--record', self.record, '--handoff', self.handoff, '--cli', self.fake, ok=False)
+        self.assertFalse((self.root / 'args').exists())
+
+    def test_unblock_allows_reviewed_blocked_task_to_resume(self):
+        self.prepare()
+        self.call('run', '--record', self.record, '--handoff', self.handoff, '--cli', self.fake)
+        self.call('record-review', '--record', self.record, '--result', 'blocked', '--evidence', 'waiting', '--progress', 'no', '--baseline-reviewed')
+        self.call('unblock', '--record', self.record, '--evidence', 'resolved')
+        self.call('run', '--record', self.record, '--handoff', self.handoff, '--cli', self.fake)
+
+    def test_outside_target_rejected(self):
+        data = json.loads(self.tasks.read_text())
+        data['tasks'][0]['targets'] = ['../../outside']
+        self.tasks.write_text(json.dumps(data))
+        self.call('prepare', '--record', self.record, '--project', self.project, '--title', 'task title', '--plan', self.plan, '--tasks-file', self.tasks, '--criteria', 'criteria', '--authorization', 'scope', '--verify', 'test', ok=False)
+
+    def test_protected_ignored_file_change_blocks_pass(self):
+        (self.project/'.gitignore').write_text('secret.env\n')
+        (self.project/'secret.env').write_text('original secret')
+        paths = self.root/'protected.txt'
+        paths.write_text('secret.env\n')
+        self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','c','--authorization','a','--verify','v','--protect-paths-file',paths)
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        (self.project/'secret.env').write_text('changed secret')
+        self.call('record-review','--record',self.record,'--result','passed','--evidence','review','--progress','yes','--baseline-reviewed',ok=False)
+        self.call('record-review','--record',self.record,'--result','blocked','--evidence','changed','--progress','no','--baseline-reviewed')
+        self.assertNotIn('original secret', '\n'.join(p.read_text(errors='ignore') for p in self.record.rglob('*') if p.is_file()))
+
+    def test_ignored_target_is_snapshotted_without_contents(self):
+        (self.project/'.gitignore').write_text('local/\n')
+        (self.project/'local').mkdir()
+        (self.project/'local'/'config').write_text('sensitive')
+        data=json.loads(self.tasks.read_text()); data['tasks'][0]['targets']=['local']
+        self.tasks.write_text(json.dumps(data))
+        self.prepare()
+        manifest=json.loads((self.record/'snapshots'/'baseline'/'manifest.json').read_text())
+        self.assertIn('local/config', manifest)
+        self.assertFalse((self.record/'snapshots'/'baseline'/'files'/'local'/'config').exists())
+        (self.project/'local'/'config').write_text('changed')
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake,ok=False)
+
+    def test_version_files_are_never_overwritten(self):
+        self.prepare()
+        path=self.record/'plans'/'plan-002.txt'
+        path.write_text('existing')
+        result=self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','c','--authorization','a','--verify','v')
+        self.assertEqual(path.read_text(),'existing')
+        self.assertEqual(result['plan_version'],3)
+
+    def test_protected_tracked_file_not_copied(self):
+        (self.project/'secret').write_text('private content')
+        subprocess.run(['git','-C',str(self.project),'add','secret'],check=True)
+        protected=self.root/'protect'; protected.write_text('secret\n')
+        self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','c','--authorization','a','--verify','v','--protect-paths-file',protected)
+        for path in self.record.rglob('*'):
+            if path.is_file(): self.assertNotIn(b'private content', path.read_bytes())
+
+    def test_launch_failure_can_be_reviewed(self):
+        self.prepare()
+        self.fake.write_text(self.fake.read_text().replace('else:\n open(', 'else:\n open('))
+        # A valid models command followed by an invalid interpreter on launch.
+        self.fake.write_text(self.fake.read_text().replace('else:\n open(', 'else:\n import os\n os.unlink(__file__)\n open('))
+        # Remove the executable only after model discovery.
+        content=self.fake.read_text().replace('if a[0]=="models": print("codefree/GLM-5.3-TokenPlan")', 'if a[0]=="models":\n print("codefree/GLM-5.3-TokenPlan")\n import os\n os.unlink(__file__)')
+        self.fake.write_text(content)
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake,ok=False)
+        state=self.call('status','--record',self.record)
+        self.assertEqual(state['phase'],'awaiting_review')
+        self.assertIsNone(state['process'])
+        self.call('record-review','--record',self.record,'--result','blocked','--evidence','launch failed','--progress','no','--baseline-reviewed')
+
+    def test_protected_file_restored_can_unblock(self):
+        (self.project/'secret').write_text('original')
+        subprocess.run(['git','-C',str(self.project),'add','secret'],check=True)
+        protected=self.root/'protect'; protected.write_text('secret\n')
+        self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','c','--authorization','a','--verify','v','--protect-paths-file',protected)
+        self.fake.write_text(self.fake.read_text().replace('else:\n open(', 'else:\n open('+repr(str(self.project/'secret'))+',"w").write("changed")\n open('))
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.call('record-review','--record',self.record,'--result','blocked','--evidence','changed','--progress','no','--baseline-reviewed')
+        (self.project/'secret').write_text('original')
+        self.call('unblock','--record',self.record,'--evidence','restored')
+
+    def test_blocked_review_records_staged_change(self):
+        subprocess.run(['git','-C',str(self.project),'add','tracked'],check=True)
+        self.prepare()
+        self.fake.write_text(self.fake.read_text().replace('else:\n open(', 'else:\n import subprocess\n subprocess.run(["git","-C",'+repr(str(self.project))+',"reset","-q","HEAD","--","tracked"],check=True)\n open('))
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.call('record-review','--record',self.record,'--result','blocked','--evidence','stage changed','--progress','no','--baseline-reviewed')
+
+    def test_reconcile_retains_snapshot_failure_evidence(self):
+        self.prepare()
+        state=json.loads((self.record/'state.json').read_text())
+        state['round']=1; state['process']={'pid':None,'round':1}
+        state['last_run']={'round_dir':str(self.record.resolve()/'rounds'/'001'),'exit_code':4,'issues':['snapshot failed: example']}
+        (self.record/'state.json').write_text(json.dumps(state))
+        self.call('status','--record',self.record,'--reconcile','--evidence','confirmed','--confirmed-no-process')
+        state=self.call('status','--record',self.record)
+        self.assertEqual(state['last_run']['exit_code'],4)
+        self.assertIn('snapshot failed: example',state['last_run']['issues'])
+
+    def test_initial_prepare_failure_leaves_no_partial_record(self):
+        self.tasks.write_text(json.dumps({'version':1,'tasks':[{'id':'1','title':'x','goal':'x','targets':['tracked'],'depends_on':[],'steps':['x'],'acceptance':['x'],'verification':[{'command':'x','expected':'x'}]}]}))
+        protected=self.root/'protect'; protected.write_text('directory\n')
+        (self.project/'directory').mkdir()
+        self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','c','--authorization','a','--verify','v','--protect-paths-file',protected,ok=False)
+        self.assertFalse(self.record.exists())
+        self.prepare()
+
+    def test_new_protection_preserves_staged_baseline_comparison(self):
+        (self.project/'secret').write_text('secret')
+        subprocess.run(['git','-C',str(self.project),'add','secret'],check=True)
+        self.prepare()
+        protected=self.root/'protect'; protected.write_text('secret\n')
+        self.call('prepare','--record',self.record,'--project',self.project,'--title','task title','--plan',self.plan,'--tasks-file',self.tasks,'--criteria','c','--authorization','a','--verify','v','--protect-paths-file',protected)
+        self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
+        self.call('record-review','--record',self.record,'--result','passed','--evidence','ok','--progress','yes','--baseline-reviewed')
+
+    def test_snapshot_failure_preserves_exit_and_reconciles(self):
+        self.prepare()
+        self.fake.write_text(self.fake.read_text().replace('else:\n open(', 'else:\n import os\n os.unlink('+repr(str(self.project/'tracked'))+')\n os.mkdir('+repr(str(self.project/'tracked'))+')\n open('))
+        result=self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake,ok=False)
+        self.assertTrue(result['reconcile_required'])
+        state=self.call('status','--record',self.record)
+        self.assertEqual(state['last_run']['exit_code'],0)
+        (self.project/'tracked').rmdir()
+        (self.project/'tracked').write_text('user edit\n')
+        self.call('status','--record',self.record,'--reconcile','--evidence','restored')
+        state=self.call('status','--record',self.record)
+        self.assertTrue(any('snapshot failed:' in x for x in state['last_run']['issues']))
+
     def test_auto_is_default(self):
         self.prepare()
         self.call('run','--record',self.record,'--handoff',self.handoff,'--cli',self.fake)
         self.assertIn('--auto',json.loads((self.root/'args').read_text()))
+
+if __name__ == '__main__': unittest.main()
