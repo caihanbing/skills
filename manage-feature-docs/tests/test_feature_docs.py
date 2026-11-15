@@ -223,3 +223,52 @@ class IndexEscapingTests(unittest.TestCase):
         block = FEATURE_DOCS.build_index_block([doc])
         self.assertIn('[`sample-feature`](sample-feature.md)', block)
         self.assertNotIn('sample&#45;feature', block)
+
+class ExtraValidationTests(unittest.TestCase):
+    def test_inline_code_links_are_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            text = '`[fake](missing)` [real](missing2)'
+            doc = FEATURE_DOCS.FeatureDocument(repo / 'x.md', text, text, {})
+            self.assertEqual(FEATURE_DOCS.broken_local_links(doc, repo), ['missing2'])
+
+    def test_init_rejects_empty_title_before_creating_files(self):
+        import argparse
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(repo=directory, feature_id='sample', title='  ', aliases=[])
+            with self.assertRaises(FEATURE_DOCS.FeatureDocsError):
+                FEATURE_DOCS.command_init(args)
+            self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_backtick_lengths_and_unclosed_code(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            text = '`` [fake](no) ` still code `` `[visible](missing)'
+            doc = FEATURE_DOCS.FeatureDocument(repo / 'x.md', text, text, {})
+            self.assertEqual(FEATURE_DOCS.broken_local_links(doc, repo), ['missing'])
+
+    def test_strict_verified_date(self):
+        text = base_document_text().replace('2026-08-19', '20260819', 1)
+        self.assertIn('last-verified must use YYYY-MM-DD', validate_text(text))
+
+    def test_init_strips_title(self):
+        import argparse
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(repo=directory, feature_id='sample', title='  标题  ', aliases=[])
+            FEATURE_DOCS.command_init(args)
+            content = (Path(directory) / 'docs/features/sample.md').read_text()
+            self.assertIn('<!-- feature-title: 标题 -->', content)
+
+    def test_escaped_backticks_do_not_hide_links(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            text = r'Escaped \` then [broken](missing.md) and \`. Even \\`[hidden](no)`'
+            doc = FEATURE_DOCS.FeatureDocument(repo / 'x.md', text, text, {})
+            self.assertEqual(FEATURE_DOCS.broken_local_links(doc, repo), ['missing.md'])
+
+    def test_backslash_inside_code_span_does_not_escape_closer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            text = r'`abc\` [broken](missing.md) `'
+            doc = FEATURE_DOCS.FeatureDocument(repo / 'x.md', text, text, {})
+            self.assertEqual(FEATURE_DOCS.broken_local_links(doc, repo), ['missing.md'])

@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from pathlib import Path
 WORK_ID_RE = re.compile(r"^WORK-(\d{8})-(\d{3})$")
 FEATURE_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 METADATA_RE = re.compile(
-    r"^<!--\s*(work-id|work-title|work-type|work-status|risk-level|feature-ids|created|updated|code-basis|verification-basis):\s*(.*?)\s*-->$",
+    r"^<!--\s*(work-id|work-title|work-type|work-status|risk-level|feature-ids|created|updated|code-basis|verification-basis):\s*(.*?)\s*-->\r?$",
     re.MULTILINE,
 )
 STATUSES = {
@@ -113,7 +114,8 @@ def parse_metadata(text: str) -> dict[str, str]:
 
 
 def read_work_item(path: Path) -> WorkItem:
-    text = path.read_text(encoding="utf-8")
+    with path.open(encoding="utf-8", newline="") as source:
+        text = source.read()
     scan_text = mask_fenced_blocks(text)
     return WorkItem(path=path, text=text, scan_text=scan_text, metadata=parse_metadata(scan_text))
 
@@ -152,9 +154,11 @@ def atomic_write(path: Path, text: str) -> None:
     temporary_name = ""
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
+            mode="w", encoding="utf-8", newline="", dir=path.parent, prefix=f".{path.name}.", delete=False
         ) as output:
             temporary_name = output.name
+            if path.exists():
+                os.chmod(temporary_name, stat.S_IMODE(path.stat().st_mode))
             output.write(text)
             output.flush()
             os.fsync(output.fileno())
@@ -579,7 +583,7 @@ def gate_errors(
                 if has_placeholder(field_value(match.group(0), field)):
                     errors.append(f"{title} requires {field}")
         for dimension in IMPACT_DIMENSIONS:
-            matches = re.findall(rf"^\|\s*{re.escape(dimension)}\s*\|\s*(.*?)\s*\|$", impacts, re.MULTILINE)
+            matches = re.findall(rf"^\|\s*{re.escape(dimension)}\s*\|\s*(.*?)\s*\|\r?$", impacts, re.MULTILINE)
             if len(matches) != 1:
                 errors.append(f"impact {dimension} must appear exactly once")
                 continue
@@ -771,13 +775,30 @@ def find_work_item(repo: Path, work_id: str) -> WorkItem:
     raise DevWorkError(f"work item not found: {work_id}")
 
 
+def substitute_unfenced(text: str, pattern: str, replacement, count: int = 0, flags: int = 0) -> str:
+    matches = list(re.finditer(pattern, mask_fenced_blocks(text), flags))
+    if count:
+        matches = matches[:count]
+    for match in reversed(matches):
+        value = replacement(match) if callable(replacement) else match.expand(replacement)
+        text = text[:match.start()] + value + text[match.end():]
+    return text
+
+
 def invalidate_evidence(text: str) -> str:
-    def reset(match: re.Match) -> str:
-        block = match.group(0)
-        block = re.sub(r"(^- \*\*状态\*\*：\s*)PASS\s*$", r"\g<1>OPEN", block, flags=re.MULTILINE)
-        return re.sub(r"(^- \*\*证据基线\*\*：).*?$", r"\g<1>pending", block, flags=re.MULTILINE)
-    text = re.sub(r"^### (?:VER|REV)-\d+.*?(?=^### |^## |\Z)", reset, text, flags=re.MULTILINE | re.DOTALL)
-    return re.sub(r"(^- \*\*用户回归结果\*\*：\s*)passed\s*$", r"\g<1>pending", text, flags=re.MULTILINE)
+    scan = mask_fenced_blocks(text)
+    records = list(re.finditer(r"^### (?:VER|REV)-\d+[^\r\n]*(?:\r?\n|$).*?(?=^### |^## |\Z)", scan, re.MULTILINE | re.DOTALL))
+    for record in reversed(records):
+        block = text[record.start():record.end()]
+        block = substitute_unfenced(block, r"(^- \*\*状态\*\*：[ \t]*)PASS(?=[ \t]*\r?$)", r"\g<1>OPEN", flags=re.MULTILINE)
+        block = substitute_unfenced(block, r"(^- \*\*证据基线\*\*：)[^\r\n]*", r"\g<1>pending", flags=re.MULTILINE)
+        text = text[:record.start()] + block + text[record.end():]
+    regression = re.search(r"^## 用户回归[ \t]*\r?$.*?(?=^## |\Z)", mask_fenced_blocks(text), re.MULTILINE | re.DOTALL)
+    if regression:
+        block = text[regression.start():regression.end()]
+        block = substitute_unfenced(block, r"(^- \*\*用户回归结果\*\*：[ \t]*)passed(?=[ \t]*\r?$)", r"\g<1>pending", flags=re.MULTILINE)
+        text = text[:regression.start()] + block + text[regression.end():]
+    return text
 
 
 def migrate_work_item(repo: Path, work_id: str) -> None:
@@ -786,16 +807,18 @@ def migrate_work_item(repo: Path, work_id: str) -> None:
         raise DevWorkError("migration requires implementing status")
     text = item.text
     if "verification-basis" not in item.metadata:
-        text = re.sub(r"(<!-- code-basis:.*?-->)[ \t]*$", r"\1\n<!-- verification-basis: pending -->", text, count=1, flags=re.MULTILINE)
-    def add_field(match: re.Match) -> str:
-        block = match.group(0)
-        if not re.search(r"^- \*\*证据基线\*\*：", block, re.MULTILINE):
-            block = block.rstrip() + "\n- **证据基线**：pending\n\n"
-        return block
-    text = re.sub(r"^### (?:VER|REV)-\d+.*?(?=^### |^## |\Z)", add_field, text, flags=re.MULTILINE | re.DOTALL)
+        text = substitute_unfenced(text, r"^(<!-- code-basis:[^\r\n]*?-->)[ \t]*(?=\r?$)", lambda m: m.group(0) + ("\r\n" if "\r\n" in text else "\n") + "<!-- verification-basis: pending -->", count=1, flags=re.MULTILINE)
+    scan = mask_fenced_blocks(text)
+    records = list(re.finditer(r"^### (?:VER|REV)-\d+[^\r\n]*(?:\r?\n|$).*?(?=^### |^## |\Z)", scan, re.MULTILINE | re.DOTALL))
+    for match in reversed(records):
+        if not re.search(r"^- \*\*证据基线\*\*：", match.group(0), re.MULTILINE):
+            newline = "\r\n" if "\r\n" in text else "\n"
+            pos = match.end()
+            prefix = "" if pos == 0 or text[pos - 1] in "\r\n" else newline
+            text = text[:pos] + prefix + "- **证据基线**：pending" + newline + text[pos:]
     if text != item.text or not item.metadata.get("verification-basis", "").startswith("impl-v2 sha256:"):
         text = invalidate_evidence(text)
-        text = re.sub(r"(<!-- verification-basis:\s*).*?(\s*-->)", r"\g<1>pending\g<2>", text, count=1)
+        text = substitute_unfenced(text, r"^(<!-- verification-basis:\s*).*?(\s*-->)", r"\g<1>pending\g<2>", count=1, flags=re.MULTILINE)
     if text != item.text:
         write_item_and_index(repo, item, text)
 
@@ -814,15 +837,15 @@ def transition_work_item(
     errors.extend(gate_errors(item, target, root, feature_validator))
     if errors:
         return errors
-    text = re.sub(r"(<!-- work-status:\s*)(.*?)(\s*-->)", rf"\g<1>{target}\g<3>", item.text, count=1)
-    text = re.sub(r"(<!-- updated:\s*)(.*?)(\s*-->)", rf"\g<1>{dt.date.today().isoformat()}\g<3>", text, count=1)
+    text = substitute_unfenced(item.text, r"^(<!-- work-status:\s*)(.*?)(\s*-->)", rf"\g<1>{target}\g<3>", count=1, flags=re.MULTILINE)
+    text = substitute_unfenced(text, r"^(<!-- updated:\s*)(.*?)(\s*-->)", rf"\g<1>{dt.date.today().isoformat()}\g<3>", count=1, flags=re.MULTILINE)
     if target == "verifying":
         if "verification-basis" not in item.metadata:
             return ["legacy work item requires migration before verification"]
         new_basis = verification_basis(root)
         if item.metadata.get("verification-basis") not in (None, "", "pending", new_basis):
             text = invalidate_evidence(text)
-        text = re.sub(r"(<!-- verification-basis:\s*)(.*?)(\s*-->)", rf"\g<1>{new_basis}\g<3>", text, count=1)
+        text = substitute_unfenced(text, r"^(<!-- verification-basis:\s*)(.*?)(\s*-->)", rf"\g<1>{new_basis}\g<3>", count=1, flags=re.MULTILINE)
     write_item_and_index(root, item, text)
     return []
 

@@ -6,7 +6,7 @@
 <!-- feature-status: active -->
 <!-- feature-summary: 面向仓库本地研发工作的 Work Item 生命周期、质量门禁与 Feature Docs Closeout。 -->
 <!-- last-verified: 2026-11-15 -->
-<!-- code-basis: impl-v2 sha256:97696031aed164db346ad2e10d6df9585dae87b73a676203648fbde9a6111e3d -->
+<!-- code-basis: impl-v2 sha256:4e62b7660c1d9a0a997c92869e7fdbf67913e09db2cf16ca839ecf7fb45f00e9 -->
 
 ## 快速上下文
 
@@ -30,7 +30,7 @@
 - 校验 `REQ-*`、`DEC-*`、`RSK-*`、`VER-*`、`REV-*` 记录、变更影响 14 个维度、风险等级和用户回归交接字段。
 - 在 `verifying` 保存 `verification-basis`，在交付/关闭前检查有效实现内容与 v2 验证基线。
 - 对关联 Feature Doc 调用 sibling 或 `--feature-validator` 指定的 canonical validator；Git 仓库使用 fresh，非 Git 工作区使用 structural 校验。
-- 自动创建和同步 Work Item 索引，并屏蔽 fenced Markdown 中的伪元数据、标题和记录。
+- 自动创建和同步 Work Item 索引，并在解析及证据失效、迁移与状态更新时屏蔽 fenced Markdown 中的伪元数据、标题和字段，保留 CRLF。
 
 ### 范围外
 
@@ -137,13 +137,13 @@
 ## 并发与幂等
 
 - `init` 使用独占创建并拒绝既有目标文件；Work Item ID、Feature ID、记录 ID 和影响维度的唯一性检查提供基本的重复提交保护。
-- 状态更新与索引重写通过临时文件加 `os.replace` 的单文件原子替换完成；但 Work Item 文件和索引是两个独立写入，没有跨文件事务或进程锁。
+- 状态更新与索引重写通过临时文件加 `os.replace` 的单文件原子替换完成，已有文件 POSIX mode 保留，新原子文件使用 0600；但 Work Item 文件和索引是两个独立写入，没有跨文件事务或进程锁。
 - `implementation_snapshot.py` 按有效实现路径、类型、模式及内容计算指纹；排除 `docs/features/`、`docs/work-items/`、`docs/superpowers/`，因此维护管理文档不会使实现基线失效。
 - 没有消息投递、重试、分布式锁或幂等键；幂等边界是稳定文件/记录 ID、拒绝覆盖和验证快照相等。并行调用时索引重建与状态迁移仍可能竞争。
 
 ## 安全与权限
 
-- 当前没有应用层认证、授权、租户边界或审批签名；文件读写权限由操作系统，Git 子进程按当前用户权限执行。
+- 原子替换不保证保留 ACL、所有者和扩展属性；当前没有应用层认证、授权、租户边界或审批签名；文件读写权限由操作系统，Git 子进程按当前用户权限执行。
 - 工具不连接外部网络服务，也不负责读取或保存凭据、令牌和业务敏感数据；Work Item 正文仍可能包含用户写入的项目敏感信息，应按仓库权限管理。
 - `init` 对标题和 ID 做最小格式/单行约束；Markdown 正文由仓库使用者维护，CLI 不对正文进行 HTML、命令或机密信息清洗。
 - 决策、风险、验证、审查和回归字段构成可追溯记录，但当前没有不可抵赖审计日志或签名校验；恶意或越权写仓库的防护不在本 Skill 内。
@@ -166,9 +166,8 @@
 
 ### 已执行
 
-- `python3 -m unittest discover -s manage-feature-docs/tests -p 'test*.py'` — 65 项通过；`manage-dev-work/tests` 63 项通过；仓库级 `tests` 2 项通过。
-- 两个正式 ZIP 并列解包后分别通过 65 项和 63 项测试；在隔离 Git 仓库中关联 Feature Doc 的完整关闭流程通过。
-- 本机 Skill 格式校验通过；本版档案和 Work Item 的 fresh／关闭门禁由交付前检查验证。
+- 本轮 `manage-feature-docs` 72 项、`manage-dev-work` 70 项及跨 Skill 2 项测试通过；Feature Docs 在 Python 3.8 和 3.14 均通过。
+- 隔离 Git 仓库中的双 Skill CLI 完整关闭流程及独立 CRLF 状态链检查通过；Skill 格式校验通过。
 
 ### 未执行
 
@@ -221,6 +220,14 @@
 - **后续动作**：只有出现服务化集成需求时，才在 Work Item 中补充基于仓库证据的发布/回归交接，并另行设计外部系统集成。
 
 ## 变更记录
+
+### 2026-11-15 — 修复权限与 Markdown 边界
+
+- **状态**：已完成
+- **变化**：保留现有文件 POSIX mode，保护 fenced 示例与换行，并收紧标题、日期及行内代码链接检查。
+- **原因**：防止权限意外收窄、示例被误改和无效输入误判。
+- **兼容性**：不改变 CLI、状态机或快照协议；ACL、所有者和扩展属性不作保留保证。
+- **验证**：72、70、2 项测试，Python 3.8/3.14 Feature Docs 测试、独立 CRLF 状态链及 Git 关闭流程通过。
 
 ### 2026-11-15 — 修复阶段门与稀疏快照
 

@@ -11,4 +11,5 @@
 | [`WORK-20261115-001`](WORK-20261115-001.md) | 接入研发专项技能路由 | change | medium | closed | manage-feature-docs, manage-dev-work | 2026-11-15 |
 | [`WORK-20261115-002`](WORK-20261115-002.md) | 修复双 Skill 快照和验证门禁 | change | high | closed | manage-feature-docs, manage-dev-work | 2026-11-15 |
 | [`WORK-20261115-003`](WORK-20261115-003.md) | 修复阶段门禁与稀疏快照 | change | high | closed | manage-feature-docs, manage-dev-work | 2026-11-15 |
+| [`WORK-20261115-004`](WORK-20261115-004.md) | 修复档案写入与 Markdown 边界 | change | medium | closed | manage-feature-docs, manage-dev-work | 2026-11-15 |
 <!-- manage-dev-work:index:end -->

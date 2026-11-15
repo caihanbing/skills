@@ -895,3 +895,100 @@ class NewContractTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     DEV_WORK.migrate_work_item(repo, DEV_WORK.read_work_item(path).work_id)
             self.assertEqual(original, path.read_text())
+
+class PreservationTests(unittest.TestCase):
+    def test_atomic_write_preserves_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'item'
+            path.write_text('old')
+            path.chmod(0o644)
+            DEV_WORK.atomic_write(path, 'new')
+            self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+
+    def test_invalidate_preserves_fenced_examples_and_crlf(self):
+        text = '### VER-001\r\n- **状态**：PASS\r\n```\r\n- **状态**：PASS\r\n- **证据基线**：example\r\n```\r\n- **证据基线**：old\r\n'
+        expected = text.replace('PASS\r\n```', 'OPEN\r\n```').replace('：old', '：pending')
+        self.assertEqual(DEV_WORK.invalidate_evidence(text), expected)
+
+    def test_invalidate_only_user_regression_section(self):
+        text = '## 其他\n- **用户回归结果**：passed\n## 用户回归\n- **用户回归结果**：passed\n'
+        self.assertEqual(DEV_WORK.invalidate_evidence(text), text.rsplit('passed', 1)[0] + 'pending\n')
+
+    def test_atomic_new_file_is_private_and_failure_preserves_original(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'item'
+            DEV_WORK.atomic_write(path, 'old')
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            path.chmod(0o640)
+            with patch.object(DEV_WORK.os, 'replace', side_effect=OSError('failed')):
+                with self.assertRaises(OSError):
+                    DEV_WORK.atomic_write(path, 'new')
+            self.assertEqual(path.read_text(), 'old')
+            self.assertEqual(path.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(list(Path(directory).iterdir()), [path])
+
+    def test_migration_preserves_fenced_examples_and_crlf(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            path = DEV_WORK.init_work_item(repo, 'WORK-20260906-001', '标题', 'feature', 'low', ())
+            text = path.read_text().replace('work-status: intake', 'work-status: implementing')
+            text = re.sub(r'^<!-- verification-basis:.*\n', '', text, flags=re.MULTILINE)
+            text = re.sub(r'^- \*\*证据基线\*\*：.*\n', '', text, flags=re.MULTILINE)
+            sample = '```\n### VER-999 — 示例\n- **状态**：PASS\n- **证据基线**：example\n```\n'
+            text = text.replace('### VER-001', sample + '### VER-001').replace('\n', '\r\n')
+            path.write_bytes(text.encode())
+            DEV_WORK.migrate_work_item(repo, 'WORK-20260906-001')
+            result = path.read_bytes().decode()
+            self.assertIn(sample.replace('\n', '\r\n'), result)
+            self.assertNotIn('\n', result.replace('\r\n', ''))
+            self.assertIn('<!-- verification-basis: pending -->', result)
+            first = result
+            DEV_WORK.migrate_work_item(repo, 'WORK-20260906-001')
+            self.assertEqual(path.read_bytes().decode(), first)
+
+    def test_crlf_git_reentry_preserves_examples_and_invalidates_real_records(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory)
+            subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+            code = repo / 'app.py'
+            code.write_text('one\n')
+            work_id = 'WORK-20260906-001'
+            path = DEV_WORK.init_work_item(repo, work_id, '标题', 'feature', 'low', ())
+            DevWorkTests()._complete_low_risk_item(path)
+            text = path.read_text().replace('\n', '\r\n')
+            path.write_bytes(text.encode())
+            for target in ('clarified', 'planned', 'implementing', 'verifying'):
+                self.assertEqual([], DEV_WORK.transition_work_item(repo, work_id, target))
+            text = path.read_bytes().decode()
+            sample = '```\r\n- **状态**：PASS\r\n- **证据基线**：example\r\n- **用户回归结果**：passed\r\n```\r\n'
+            text = text.replace('### VER-001', sample + '### VER-001', 1)
+            pos = text.index('\r\n', text.index('### VER-001')) + 2
+            text = text[:pos] + sample + text[pos:]
+            text = text.replace('**用户回归结果**：not-required', '**用户回归结果**：passed')
+            path.write_bytes(text.encode())
+            self.assertEqual([], DEV_WORK.transition_work_item(repo, work_id, 'implementing'))
+            code.write_text('two\n')
+            self.assertEqual([], DEV_WORK.transition_work_item(repo, work_id, 'verifying'))
+            result = path.read_bytes().decode()
+            self.assertEqual(result.count(sample), 2)
+            self.assertNotIn('\n', result.replace('\r\n', ''))
+            self.assertIn('- **状态**：OPEN', result[result.index('### VER-001'):])
+            self.assertIn('- **用户回归结果**：pending', result)
+
+    def test_atomic_write_uses_literal_newlines_and_portable_chmod(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'item'
+            path.write_bytes(b'old')
+            path.chmod(0o640)
+            named = DEV_WORK.tempfile.NamedTemporaryFile
+            chmod = DEV_WORK.os.chmod
+            with patch.object(DEV_WORK.tempfile, 'NamedTemporaryFile', wraps=named) as create, \
+                 patch.object(DEV_WORK.os, 'chmod', wraps=chmod) as set_mode:
+                DEV_WORK.atomic_write(path, 'a\r\nb\n')
+            self.assertEqual(create.call_args.kwargs['newline'], '')
+            set_mode.assert_called_once()
+            self.assertEqual(path.read_bytes(), b'a\r\nb\n')
+            self.assertEqual(path.stat().st_mode & 0o777, 0o640)

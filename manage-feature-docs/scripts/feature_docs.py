@@ -300,7 +300,10 @@ def command_init(args: argparse.Namespace) -> int:
     feature_id = args.feature_id
     if not FEATURE_ID_RE.fullmatch(feature_id):
         raise FeatureDocsError("feature ID must be lowercase kebab-case")
-    reject_unsafe_metadata("title", args.title)
+    title = args.title.strip()
+    if not title:
+        raise FeatureDocsError("title must not be empty")
+    reject_unsafe_metadata("title", title)
     aliases = tuple(dict.fromkeys(alias.strip() for alias in args.aliases if alias.strip()))
     for alias in aliases:
         reject_unsafe_metadata("alias", alias)
@@ -324,7 +327,7 @@ def command_init(args: argparse.Namespace) -> int:
 
     source = template_path().read_text(encoding="utf-8")
     replacements = {
-        "{{FEATURE_TITLE}}": args.title,
+        "{{FEATURE_TITLE}}": title,
         "{{FEATURE_ID}}": feature_id,
         "{{FEATURE_ALIASES}}": ", ".join(aliases),
         "{{LAST_VERIFIED}}": dt.date.today().isoformat(),
@@ -399,7 +402,28 @@ def extract_link_target(raw_target: str) -> str:
 def broken_local_links(document: FeatureDocument, repo: Path) -> list[str]:
     broken: list[str] = []
     repository_root = repo.resolve()
-    for match in MARKDOWN_LINK_RE.finditer(document.scan_text):
+    scan = document.scan_text
+    runs = list(re.finditer(r"`+", scan))
+    masked = list(scan)
+    i = 0
+    while i < len(runs):
+        start = runs[i].start()
+        while start and scan[start - 1] == "\\":
+            start -= 1
+        if (runs[i].start() - start) % 2:
+            i += 1
+            continue
+        j = i + 1
+        while j < len(runs) and len(runs[j].group()) != len(runs[i].group()):
+            j += 1
+        if j == len(runs):
+            i += 1
+            continue
+        for k in range(runs[i].start(), runs[j].end()):
+            if masked[k] not in "\r\n":
+                masked[k] = " "
+        i = j + 1
+    for match in MARKDOWN_LINK_RE.finditer("".join(masked)):
         target = unquote(extract_link_target(match.group(1)))
         if not target or target.startswith(("#", "http://", "https://", "mailto:")):
             continue
@@ -453,6 +477,8 @@ def validate_document(document: FeatureDocument, repo: Path) -> list[str]:
     verified_date: dt.date | None = None
     if verified:
         try:
+            if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", verified):
+                raise ValueError("invalid date format")
             verified_date = dt.date.fromisoformat(verified)
             if verified_date > dt.date.today():
                 errors.append("last-verified cannot be in the future")
